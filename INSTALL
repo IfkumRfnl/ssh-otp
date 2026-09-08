@@ -1,0 +1,128 @@
+ssh-otp — single-use SSH passphrases
+===================================
+
+Build on Debian with Zig 0.16.0 and libc development headers:
+
+    mise exec -- zig build -Doptimize=ReleaseSafe
+    mise exec -- zig build test -Doptimize=ReleaseSafe
+
+Or invoke your installed Zig 0.16.0 directly. There are no third-party Zig
+packages, package downloads, PAM development headers, or resident daemons.
+Debian's libc development headers (libc6-dev), OpenSSH server and PAM runtime
+are required. Python 3 is used for installation, not authentication.
+
+Install (keep an existing trusted SSH-key session open):
+
+    sudo python3 install.py install --user hayk
+
+The build is deliberately separate: never run the Zig build as root.
+The installer installs a root-owned setuid CLI and a root-owned PAM shared
+library, replaces only sshd's standard common-auth include with the burner-only
+module, validates effective SSH settings, and reloads ssh.service. It does not
+restart SSH, create users, change passwords, change sudo policy, or remove
+AllowUsers, AllowGroups, PermitRootLogin or other SSH account restrictions.
+
+The supported starting configuration is Debian's standard PAM include structure
+and key-only SSH authentication. Customized authentication stacks and existing
+multi-factor policies are rejected rather than silently weakened. Configurations
+with Match rules or external Includes require administrator review; the installer
+checks effective settings for --user at localhost, not every possible SSH context.
+
+Use --no-reload to stage and validate without reloading ssh.service:
+
+    sudo python3 install.py install --user hayk --no-reload
+    sudo systemctl reload ssh
+
+Keep the trusted session open until a second session succeeds. On installation
+errors, changed files are restored. SIGKILL or a machine failure during installation
+may require manual recovery using /var/lib/ssh-otp-install/sshd.pam.original;
+installation transactions are not guaranteed across power loss. Re-running an
+installation with existing state is refused. Uninstall before reinstalling.
+
+Usage from a trusted server session:
+
+    ssh-otp hayk 10m
+
+Type the displayed phrase at the SSH prompt on Windows:
+
+    ssh hayk@server
+
+If needed, explicitly choose the supported authentication method:
+
+    ssh -o PreferredAuthentications=keyboard-interactive hayk@server
+
+No download or SSH key is required on Windows. Obtain the server's host-key
+fingerprint through your trusted session and verify it on first connection.
+
+Only existing users are supported. Non-root issuers can target only their real
+UID; root can target any existing account. Existing SSH account restrictions
+still apply, so issuance does not guarantee that an account is allowed to log in.
+The executable must reside on a filesystem that permits setuid execution.
+
+Four uniformly random EFF words are joined by '='. Four EFF entries contain
+hyphens, which are retained. Four words provide about 51.7 bits of entropy.
+The phrase is printed once, only to a terminal, and is never stored in plaintext.
+Your terminal scrollback may retain it. There is one outstanding phrase per UID.
+A new issuance replaces the previous phrase. Five incorrect candidate phrases
+invalidate it, so a remote attacker can cause denial of service to an issuance.
+
+Duration is a positive integer with s, m, or h suffix, from 1s through 1h.
+The deadline is measured in boot-clock seconds, including suspend; precision is
+one second. Authentication consumes the phrase atomically, even if subsequent
+account checks fail or the client disconnects. The established session is not
+terminated by expiry. This is an SSH credential, NOT a sudo credential.
+
+Ctrl-C, SIGTERM and SIGHUP revoke an outstanding phrase. A killed/crashed issuer
+may leave the phrase active until its original deadline. PAM enforces that
+original expiry independently. Stale expired records are removed on access or
+reboot; the /run store is deliberately not persistent.
+
+An untrusted client can steal the phrase before use or control your session.
+It can also capture a reusable sudo password. This tool avoids leaving reusable
+SSH keys behind; it does not make a compromised client trustworthy. Do not
+forward an SSH agent to it. This is new privileged authentication code, not an
+independently audited security product.
+
+Uninstall:
+
+    sudo python3 install.py uninstall
+
+The installer restores the original SSH PAM file, removes its drop-in and
+binaries, validates configuration, and reloads SSH. Uninstall refuses to overwrite
+files changed since installation. --no-reload is also supported; existing daemon
+processes can retain old configuration until reload. Outstanding runtime records
+are removed. Existing sessions are not forcibly disconnected.
+
+Verification
+------------
+
+The production CLI and PAM module are exercised using real Linux-PAM and OpenSSH
+in an isolated user/mount/network namespace and chroot. No live server config is
+changed. Run as your normal user, NOT host root:
+
+    unshare --user --map-auto --map-root-user --mount --net \
+        python3 tests/integration.py
+
+Requires working subordinate UID/GID mappings and newuidmap/newgidmap (uidmap),
+util-linux, Python 3, GCC, libc headers, iproute2, OpenSSL, and OpenSSH client/server.
+The namespace test temporarily runs an SSH daemon on its private loopback only.
+It uses the production binaries from zig-out, not a privilege-relaxed test build.
+It verifies real-UID restrictions, unknown users, bounds, redirect rejection,
+concurrent consumption, attempt limits, replacement, interruption, expiry even
+after SIGKILL, real key and burner logins, continued sessions after expiry,
+replay rejection, Unix-password rejection, uninstall restoration and rollback
+when effective SSH configuration conflicts with the installation.
+
+Wordlist attribution
+--------------------
+
+src/words.txt is EFF's large wordlist by Joseph Bonneau (July 2016), with the
+five-digit dice labels removed and word order retained. EFF content is licensed
+CC BY 4.0 unless otherwise noted. The wordlist is embedded at build time.
+
+https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
+https://www.eff.org/dice
+https://www.eff.org/copyright
+https://creativecommons.org/licenses/by/4.0/
+
+Source: https://github.com/IfkumRfnl/ssh-otp

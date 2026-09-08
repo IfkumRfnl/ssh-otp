@@ -1,5 +1,4 @@
 const std = @import("std");
-const options = @import("build_options");
 const c = @cImport({
     // glibc's fortified variadic wrappers cannot be translated by translate-c.
     @cUndef("_FORTIFY_SOURCE");
@@ -25,7 +24,7 @@ const words = blk: {
     if (lines.next() != null) @compileError("wordlist too long");
     break :blk result;
 };
-const store_path: [:0]const u8 = options.store_path ++ "";
+const store_path: [:0]const u8 = "/run/ssh-otp";
 
 fn random(bytes: []u8) !void {
     var offset: usize = 0;
@@ -57,7 +56,7 @@ const Store = struct {
     lock: c_int,
 
     fn open(path: [:0]const u8) !Store {
-        if (!options.testing and c.geteuid() != 0) return error.RootRequired;
+        if (!@import("builtin").is_test and c.geteuid() != 0) return error.RootRequired;
         if (c.mkdir(path, 0o700) != 0 and c.__errno_location().* != c.EEXIST) return error.StoreUnavailable;
         const dir = c.open(path, c.O_RDONLY | c.O_DIRECTORY | c.O_NOFOLLOW | c.O_CLOEXEC);
         if (dir < 0) return error.UnsafeStore;
@@ -235,7 +234,7 @@ const TestStore = struct {
         return self;
     }
     fn slice(self: *const TestStore) [:0]const u8 {
-        return self.path[0..std.mem.indexOfScalar(u8, &self.path, 0).?:0];
+        return self.path[0..std.mem.indexOfScalar(u8, &self.path, 0).? :0];
     }
     fn deinit(self: *const TestStore) void {
         const dir = c.open(self.slice(), c.O_RDONLY | c.O_DIRECTORY);

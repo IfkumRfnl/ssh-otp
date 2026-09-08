@@ -1,5 +1,4 @@
 const core = @import("core.zig");
-const options = @import("build_options");
 
 const PamHandle = opaque {};
 const PamMessage = extern struct {
@@ -55,7 +54,7 @@ export fn pam_sm_authenticate(handle: ?*PamHandle, flags: c_int, argc: c_int, ar
     // This module has no runtime options, especially no password fallback or
     // alternate credential-store path. Reject misspelled configuration options.
     if (argc != 0 or (flags & ~(PAM_SILENT | PAM_DISALLOW_NULL_AUTHTOK)) != 0) return PAM_AUTH_ERR;
-    if (!options.testing and geteuid() != 0) return PAM_AUTH_ERR;
+    if (geteuid() != 0) return PAM_AUTH_ERR;
     const pamh = handle orelse return PAM_AUTH_ERR;
 
     var username: ?[*:0]const u8 = null;
