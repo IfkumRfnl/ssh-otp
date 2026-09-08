@@ -198,6 +198,17 @@ pub fn revoke(uid: u32, token: [16]u8) !void {
     return revokeAt(store_path, uid, token);
 }
 
+pub fn hasActive(uid: u32) !bool {
+    const store = try Store.open(store_path);
+    defer store.close();
+    const record = (try store.load(uid)) orelse return false;
+    if (try now() >= std.mem.readInt(u64, record[20..28], .little) or record[60] >= 5) {
+        try store.remove(uid);
+        return false;
+    }
+    return true;
+}
+
 fn authenticateAt(path: [:0]const u8, uid: u32, phrase: []const u8) !bool {
     const store = try Store.open(path);
     defer store.close();

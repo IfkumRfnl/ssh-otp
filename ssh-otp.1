@@ -9,6 +9,9 @@ Prints four independently random EFF wordlist words separated by equals signs.
 The credential permits one SSH authentication, not one command or session.
 It is consumed before authentication success is returned and cannot be replayed.
 A failed account check or disconnected client does not restore it.
+When no active credential exists, authentication is rejected without a password
+prompt or a burner-specific explanation. SSH reports its generic authentication
+failure. Public-key authentication remains available.
 .PP
 Duration is a positive integer followed by s, m, or h; minimum 1s, maximum 1h.
 For example: ssh-otp hayk 10m.

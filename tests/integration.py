@@ -212,16 +212,20 @@ PrintMotd no
         known = base / 'known_hosts'
         put(known, f'[127.0.0.1]:22222 {hostpub[0]} {hostpub[1]}\n')
         askpass = base / 'askpass'
-        put(askpass, '#!/bin/sh\nprintf "%s\\n" "$SSH_OTP_TEST_PHRASE"\n', 0o755)
+        prompt_log = base / 'password_prompted'
+        put(askpass, '#!/bin/sh\n: > "$SSH_OTP_TEST_PROMPT_LOG"\nprintf "%s\\n" "$SSH_OTP_TEST_PHRASE"\n', 0o755)
         common = ['ssh', '-F', '/dev/null', '-p', '22222', '-o', f'UserKnownHostsFile={known}',
                   '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5', '-o', 'NumberOfPasswordPrompts=1',
                   '-o', 'IdentityAgent=none', '-o', 'IdentitiesOnly=yes']
-        def ssh(phrase, command='printf burner-ok'):
+        def ssh(phrase, command='printf burner-ok', expect_prompt=True):
+            prompt_log.unlink(missing_ok=True)
             env = dict(os.environ, SSH_ASKPASS=str(askpass), SSH_ASKPASS_REQUIRE='force', DISPLAY='test',
-                       SSH_OTP_TEST_PHRASE=phrase)
-            return subprocess.run(common + ['-o', 'PreferredAuthentications=keyboard-interactive',
+                       SSH_OTP_TEST_PHRASE=phrase, SSH_OTP_TEST_PROMPT_LOG=str(prompt_log))
+            result = subprocess.run(common + ['-o', 'PreferredAuthentications=keyboard-interactive',
                 'hayk@127.0.0.1', command], stdin=subprocess.DEVNULL, capture_output=True, text=True,
                 env=env, start_new_session=True, timeout=10)
+            require(prompt_log.exists() == expect_prompt, 'unexpected SSH password prompt behavior')
+            return result
         log = open(base / 'sshd.log', 'w+')
         daemon = subprocess.Popen(['/usr/sbin/sshd', '-D', '-e', '-f', '/etc/ssh/sshd_config'], stdout=log, stderr=log)
         try:
@@ -238,14 +242,22 @@ PrintMotd no
             key_login = run(*(common + ['-o', 'PreferredAuthentications=publickey', '-i', str(key),
                                       'hayk@127.0.0.1', 'printf key-ok']), timeout=10)
             require(key_login.stdout == 'key-ok', 'key access changed')
+            require(ssh('no-burner', expect_prompt=False).returncode != 0,
+                    'SSH accepted connection without an active burner')
             ticket = Issuer(duration='2s')
             login = ssh(ticket.phrase, 'sleep 3; printf burner-ok')
             require(login.returncode == 0 and login.stdout == 'burner-ok', 'SSH burner login failed: '+login.stderr)
             ticket.wait()
-            require(ssh(ticket.phrase).returncode != 0, 'SSH replay accepted')
+            require(ssh(ticket.phrase, expect_prompt=False).returncode != 0, 'SSH replay accepted')
             ticket = Issuer()
             require(ssh(unix_password).returncode != 0, 'Unix password accepted as burner')
             ticket.stop()
+            require(ssh(ticket.phrase, expect_prompt=False).returncode != 0, 'revoked burner accepted')
+            expired = Issuer(duration='1s')
+            expired.stop(signal.SIGKILL)
+            time.sleep(1.1)
+            require(ssh(expired.phrase, expect_prompt=False).returncode != 0, 'expired burner prompted or accepted')
+            print('PASS: no SSH password prompt for missing, consumed, revoked or expired burners', flush=True)
             print('PASS: real SSH key login, burner login, session survives deadline, replay and Unix-password rejection', flush=True)
         except BaseException:
             log.seek(0)

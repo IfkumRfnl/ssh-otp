@@ -66,6 +66,11 @@ Your terminal scrollback may retain it. There is one outstanding phrase per UID.
 A new issuance replaces the previous phrase. Five incorrect candidate phrases
 invalidate it, so a remote attacker can cause denial of service to an issuance.
 
+Without an active burner, PAM rejects keyboard-interactive authentication before
+asking for a password. Missing, expired, consumed and revoked burners all produce
+the same generic SSH authentication failure, with no burner-specific explanation.
+The SSH method remains configured; key authentication is unchanged.
+
 Duration is a positive integer with s, m, or h suffix, from 1s through 1h.
 The deadline is measured in boot-clock seconds, including suspend; precision is
 one second. Authentication consumes the phrase atomically, even if subsequent
@@ -110,8 +115,9 @@ It uses the production binaries from zig-out, not a privilege-relaxed test build
 It verifies real-UID restrictions, unknown users, bounds, redirect rejection,
 concurrent consumption, attempt limits, replacement, interruption, expiry even
 after SIGKILL, real key and burner logins, continued sessions after expiry,
-replay rejection, Unix-password rejection, uninstall restoration and rollback
-when effective SSH configuration conflicts with the installation.
+replay rejection, Unix-password rejection, prompt-free rejection of inactive
+burners, uninstall restoration and rollback when effective SSH configuration
+conflicts with the installation.
 
 Wordlist attribution
 --------------------

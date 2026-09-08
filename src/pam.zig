@@ -64,6 +64,9 @@ export fn pam_sm_authenticate(handle: ?*PamHandle, flags: c_int, argc: c_int, ar
     const account = getpwnam(name) orelse return PAM_AUTH_ERR;
     // getpwnam uses static storage; capture the UID before calling application code.
     const uid = account.pw_uid;
+    // Reject silently before conversation. Authentication below rechecks expiry
+    // and consumption after prompting; this preflight never authorizes a login.
+    if (!(core.hasActive(uid) catch return PAM_AUTH_ERR)) return PAM_AUTH_ERR;
 
     var item: ?*const anyopaque = null;
     if (pam_get_item(pamh, PAM_CONV, &item) != PAM_SUCCESS) return PAM_AUTH_ERR;
