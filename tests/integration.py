@@ -163,7 +163,7 @@ PrintMotd no
         run('mount', '-t', 'tmpfs', '-o', 'mode=755', 'tmpfs', '/var/lib')
         run('ip', 'link', 'set', 'lo', 'up')
         python = sys.executable
-        installed = run(python, str(ROOT / 'install.py'), 'install', '--no-reload')
+        installed = run(python, str(ROOT / 'install.py'), 'install', '--user', 'hayk', '--no-reload')
         require('Installed.' in installed.stdout, 'installation failed')
         print('PASS: installer config validation and setuid installation', flush=True)
         for target, expected in [('root', 'only root'), ('ssh-otp-nonexistent-user', 'does not exist')]:
@@ -272,7 +272,7 @@ PrintMotd no
         require('@include common-auth' in Path('/etc/pam.d/sshd').read_text(), 'original PAM not restored')
         print('PASS: uninstall restores original authentication configuration', flush=True)
         put(Path('/etc/ssh/sshd_config.d/00-conflict.conf'), 'KbdInteractiveAuthentication no\n')
-        conflict = subprocess.run([python, str(ROOT / 'install.py'), 'install', '--no-reload'],
+        conflict = subprocess.run([python, str(ROOT / 'install.py'), 'install', '--user', 'hayk', '--no-reload'],
                                   capture_output=True, text=True)
         require(conflict.returncode != 0 and 'configuration conflict' in conflict.stderr,
                 'installer accepted conflicting effective SSH configuration')

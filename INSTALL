@@ -27,17 +27,22 @@ and key-only SSH authentication. Customized authentication stacks and existing
 multi-factor policies are rejected rather than silently weakened. Configurations
 with Match rules or external Includes require administrator review; the installer
 checks effective settings for --user at localhost, not every possible SSH context.
+Installation requires an explicit --user; no account name is assumed.
 
 Use --no-reload to stage and validate without reloading ssh.service:
 
     sudo python3 install.py install --user hayk --no-reload
     sudo systemctl reload ssh
 
-Keep the trusted session open until a second session succeeds. On installation
-errors, changed files are restored. SIGKILL or a machine failure during installation
-may require manual recovery using /var/lib/ssh-otp-install/sshd.pam.original;
-installation transactions are not guaranteed across power loss. Re-running an
-installation with existing state is refused. Uninstall before reinstalling.
+Keep the trusted session open until a second session succeeds. Installation and
+uninstallation attempt rollback on errors, including failures during backup or
+cleanup. Recovery failures are reported separately from the original error;
+recovery files are retained when rollback cannot finish. A PAM module still
+required by the active configuration is not removed during failed recovery.
+SIGKILL or a machine failure may require manual recovery using
+/var/lib/ssh-otp-install/sshd.pam.original; transactions are not guaranteed across
+power loss. Re-running installation with existing state is refused. Uninstall
+before reinstalling.
 
 Usage from a trusted server session:
 
@@ -92,11 +97,17 @@ Uninstall:
 
     sudo python3 install.py uninstall
 
-The installer restores the original SSH PAM file, removes its drop-in and
-binaries, validates configuration, and reloads SSH. Uninstall refuses to overwrite
-files changed since installation. --no-reload is also supported; existing daemon
-processes can retain old configuration until reload. Outstanding runtime records
-are removed. Existing sessions are not forcibly disconnected.
+The installer removes its SSH drop-in and reloads SSH before restoring the original
+PAM file and removing binaries. This avoids enabling password-backed PAM while
+the running daemon still advertises the burner authentication method.
+Uninstall refuses to overwrite files whose contents, root ownership or expected
+permission modes have changed. Existing hash manifests remain valid; file modes
+are checked against the fixed installation policy.
+Use --no-reload for uninstall only when SSH is already stopped (as in the isolated
+test); otherwise the running daemon could use the restored password-backed PAM.
+Outstanding runtime records are removed. A failed uninstall may already have
+revoked burners even if file rollback succeeds. Existing sessions are not forcibly
+disconnected.
 
 Verification
 ------------
@@ -118,6 +129,15 @@ after SIGKILL, real key and burner logins, continued sessions after expiry,
 replay rejection, Unix-password rejection, prompt-free rejection of inactive
 burners, uninstall restoration and rollback when effective SSH configuration
 conflicts with the installation.
+
+Installer failure-path regressions use temporary filesystem fixtures and injected
+I/O failures, without changing system configuration:
+
+    unshare --user --map-auto --map-root-user \
+        python3 -m unittest discover -s tests -p test_install.py -v
+
+These cover backup failure, partial uninstall, failed recovery, malformed
+manifests, modified file metadata and explicit account selection.
 
 Wordlist attribution
 --------------------

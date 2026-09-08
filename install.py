@@ -5,12 +5,14 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 
+RUNTIME = Path('/run/ssh-otp')
 STATE = Path('/var/lib/ssh-otp-install')
 PAM = Path('/etc/pam.d/sshd')
 DROPIN = Path('/etc/ssh/sshd_config.d/00-ssh-otp.conf')
@@ -18,6 +20,7 @@ CLI = Path('/usr/local/bin/ssh-otp')
 MODULE = Path('/usr/local/lib/security/pam_ssh_otp.so')
 MAN = Path('/usr/local/share/man/man1/ssh-otp.1')
 SSHD = '/usr/sbin/sshd'
+FILE_MODES = {CLI: 0o4755, MODULE: 0o644, MAN: 0o644, DROPIN: 0o644}
 CONFIG = b'''# Managed by ssh-otp. Account restrictions remain in sshd_config.
 UsePAM yes
 PubkeyAuthentication yes
@@ -33,6 +36,31 @@ def command(*args):
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def read_owned_file(path, mode):
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0
+            or stat.S_IMODE(info.st_mode) != mode):
+        raise RuntimeError(f'unsafe file ownership, permissions or type: {path}')
+    return path.read_bytes()
+
+
+def recover(errors, description, operation, *args, **kwargs):
+    """Attempt an independent recovery step without hiding the original error."""
+    try:
+        operation(*args, **kwargs)
+        return True
+    except Exception as error:
+        errors.append(f'{description}: {error}')
+        return False
+
+
+def report_recovery(errors):
+    for error in errors:
+        print(f'Recovery failed: {error}', file=sys.stderr)
+    if errors:
+        print(f'Keep your trusted session open; inspect recovery files in {STATE}.', file=sys.stderr)
 
 
 def safe_parent(path):
@@ -51,9 +79,9 @@ def replace(path, data, mode=0o644):
         with os.fdopen(fd, 'wb') as output:
             output.write(data)
             output.flush()
-            os.fsync(output.fileno())
             os.fchown(output.fileno(), 0, 0)
             os.fchmod(output.fileno(), mode)
+            os.fsync(output.fileno())
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
@@ -77,11 +105,13 @@ def reload_ssh(no_reload):
 
 
 def install(args):
-    import pwd
-    pwd.getpwnam(args.user)
-    if STATE.exists():
-        raise RuntimeError('already installed or an interrupted install exists; inspect /var/lib/ssh-otp-install before proceeding')
-    original = PAM.read_bytes()
+    try:
+        pwd.getpwnam(args.user)
+    except KeyError:
+        raise RuntimeError(f'unknown user: {args.user}') from None
+    if STATE.exists() or STATE.is_symlink():
+        raise RuntimeError(f'already installed or an interrupted install exists; inspect {STATE} before proceeding')
+    original = read_owned_file(PAM, 0o644)
     lines = original.decode().splitlines(keepends=True)
     auth = [line for line in lines if line.strip() == '@include common-auth']
     if len(auth) != 1 or any(line.lstrip().startswith(('auth ', 'auth\t', '-auth ', '-auth\t')) for line in lines):
@@ -102,41 +132,59 @@ def install(args):
     if settings.get('passwordauthentication') != 'no' or settings.get('kbdinteractiveauthentication') != 'no':
         raise RuntimeError('expected key-only SSH configuration; refusing to remove existing password/MFA access implicitly')
     root = Path(__file__).resolve().parent
-    artifacts = {CLI: ((root / 'zig-out/bin/ssh-otp').read_bytes(), 0o4755),
-                 MODULE: ((root / 'zig-out/lib/libpam_ssh_otp.so').read_bytes(), 0o644),
-                 MAN: ((root / 'ssh-otp.1').read_bytes(), 0o644),
-                 DROPIN: (CONFIG, 0o644)}
+    artifacts = {
+        CLI: (root / 'zig-out/bin/ssh-otp').read_bytes(),
+        MODULE: (root / 'zig-out/lib/libpam_ssh_otp.so').read_bytes(),
+        MAN: (root / 'ssh-otp.1').read_bytes(),
+        DROPIN: CONFIG,
+    }
     for path in artifacts:
         if path.exists() or path.is_symlink():
             raise RuntimeError(f'refusing to overwrite untracked file: {path}')
     for binary in (CLI, MODULE):
-        if not artifacts[binary][0].startswith(b'\x7fELF'):
+        if not artifacts[binary].startswith(b'\x7fELF'):
             raise RuntimeError(f'not an ELF binary: {binary}')
-    patched = ''.join(f'auth requisite {MODULE}\n' if line.strip() == '@include common-auth' else line for line in lines).encode()
-    safe_parent(STATE)
-    STATE.mkdir(mode=0o700)
-    replace(STATE / 'sshd.pam.original', original, 0o600)
-    manifest = {'pam_sha256': digest(patched), 'files': {str(path): digest(data) for path, (data, _) in artifacts.items()}}
-    replace(STATE / 'manifest.json', json.dumps(manifest).encode(), 0o600)
+    for index, line in enumerate(lines):
+        if line.strip() == '@include common-auth':
+            lines[index] = f'auth requisite {MODULE}\n'
+    patched = ''.join(lines).encode()
+    manifest = {'pam_sha256': digest(patched), 'files': {}}
+    for path, data in artifacts.items():
+        manifest['files'][str(path)] = digest(data)
+
+    state_created = False
+    pam_touched = False
+    reload_started = False
     written = []
     try:
-        for path, (data, mode) in artifacts.items():
-            replace(path, data, mode)
+        safe_parent(STATE)
+        STATE.mkdir(mode=0o700)
+        state_created = True
+        replace(STATE / 'sshd.pam.original', original, 0o600)
+        replace(STATE / 'manifest.json', json.dumps(manifest).encode(), 0o600)
+        for path, data in artifacts.items():
             written.append(path)
+            replace(path, data, FILE_MODES[path])
+        pam_touched = True
         replace(PAM, patched)
         validate(args.user)
+        reload_started = not args.no_reload
         reload_ssh(args.no_reload)
     except BaseException:
-        replace(PAM, original)
+        errors = []
+        pam_restored = not pam_touched or recover(errors, 'restore PAM', replace, PAM, original)
         for path in reversed(written):
-            path.unlink(missing_ok=True)
-        shutil.rmtree(STATE)
-        if not args.no_reload:
-            try:
-                command(SSHD, '-t')
-                reload_ssh(False)
-            except Exception as error:
-                print(f'Rollback restored files, but SSH reload failed: {error}', file=sys.stderr)
+            # Never remove a module that the still-installed PAM stack requires.
+            if path == MODULE and not pam_restored:
+                continue
+            recover(errors, f'remove {path}', path.unlink, missing_ok=True)
+        if reload_started:
+            valid = recover(errors, 'validate restored SSH configuration', command, SSHD, '-t')
+            if valid:
+                recover(errors, 'reload restored SSH configuration', reload_ssh, False)
+        if state_created and not errors:
+            recover(errors, 'remove installation state', shutil.rmtree, STATE)
+        report_recovery(errors)
         raise
     print('Installed. Existing SSH account restrictions and sudo policy are unchanged.')
     if args.no_reload:
@@ -148,36 +196,64 @@ def uninstall(args):
     info = STATE.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
         raise RuntimeError('unsafe installation state directory')
-    manifest = json.loads((STATE / 'manifest.json').read_text())
-    files = manifest['files']
-    if set(files) != {str(path) for path in (CLI, MODULE, MAN, DROPIN)}:
-        raise RuntimeError('unexpected installation manifest')
-    if digest(PAM.read_bytes()) != manifest['pam_sha256']:
+    manifest_data = read_owned_file(STATE / 'manifest.json', 0o600)
+    manifest = json.loads(manifest_data)
+    if not isinstance(manifest, dict):
+        raise RuntimeError('invalid installation manifest: expected an object')
+    files = manifest.get('files')
+    if not isinstance(files, dict) or set(files) != {str(path) for path in FILE_MODES}:
+        raise RuntimeError('unexpected installation manifest files')
+    hashes = [manifest.get('pam_sha256'), *files.values()]
+    if any(not isinstance(value, str) or len(value) != 64
+           or any(char not in '0123456789abcdef' for char in value) for value in hashes):
+        raise RuntimeError('invalid installation manifest hashes')
+    installed_pam = read_owned_file(PAM, 0o644)
+    if digest(installed_pam) != manifest['pam_sha256']:
         raise RuntimeError('PAM configuration changed since installation; refusing to overwrite it')
-    for name, expected in files.items():
-        path = Path(name)
-        if path.is_symlink() or digest(path.read_bytes()) != expected:
+    installed = {}
+    for path, mode in FILE_MODES.items():
+        data = read_owned_file(path, mode)
+        if digest(data) != files[str(path)]:
             raise RuntimeError(f'installed file changed: {path}; refusing automatic removal')
-    installed_pam = PAM.read_bytes()
-    installed_dropin = DROPIN.read_bytes()
-    replace(PAM, (STATE / 'sshd.pam.original').read_bytes())
-    DROPIN.unlink()
+        installed[path] = data
+    original = read_owned_file(STATE / 'sshd.pam.original', 0o600)
+    runtime = RUNTIME
+    if runtime.exists() or runtime.is_symlink():
+        info = runtime.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o700:
+            raise RuntimeError(f'unsafe runtime directory: {runtime}')
     try:
+        DROPIN.unlink()
         command(SSHD, '-t')
         reload_ssh(args.no_reload)
-    except BaseException:
-        replace(PAM, installed_pam)
-        replace(DROPIN, installed_dropin)
-        raise
-    # Keep the PAM module mapped for existing processes, but remove it on disk.
-    for path in (CLI, MODULE, MAN):
-        path.unlink()
-    runtime = Path('/run/ssh-otp')
-    if runtime.exists():
-        info = runtime.lstat()
-        if stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o700:
+        replace(PAM, original)
+        # Mapped modules remain available to processes that already loaded them.
+        for path in (CLI, MODULE, MAN):
+            path.unlink()
+        if runtime.exists():
             shutil.rmtree(runtime)
-    shutil.rmtree(STATE)
+        shutil.rmtree(STATE)
+    except BaseException:
+        errors = []
+        # Restore burner-only PAM before re-enabling its SSH authentication path.
+        # Even a missing module must fail closed, not fall back to common-auth.
+        for path, data in installed.items():
+            if path != DROPIN:
+                recover(errors, f'restore {path}', replace, path, data, FILE_MODES[path])
+        pam_restored = recover(errors, 'restore installed PAM', replace, PAM, installed_pam)
+        if pam_restored:
+            recover(errors, 'restore SSH drop-in', replace, DROPIN, installed[DROPIN])
+        else:
+            recover(errors, 'disable SSH drop-in', DROPIN.unlink, missing_ok=True)
+        recover(errors, 'restore recovery directory', STATE.mkdir, mode=0o700, exist_ok=True)
+        recover(errors, 'restore original PAM backup', replace, STATE / 'sshd.pam.original', original, 0o600)
+        recover(errors, 'restore manifest', replace, STATE / 'manifest.json', manifest_data, 0o600)
+        if not args.no_reload:
+            valid = recover(errors, 'validate restored SSH configuration', command, SSHD, '-t')
+            if valid:
+                recover(errors, 'reload restored SSH configuration', reload_ssh, False)
+        report_recovery(errors)
+        raise
     print('Uninstalled; original SSH PAM authentication restored.')
     if args.no_reload:
         print('SSH was NOT reloaded. Run sudo systemctl reload ssh when ready.')
@@ -186,15 +262,20 @@ def uninstall(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('install', 'uninstall'))
-    parser.add_argument('--user', default='hayk', help='existing account used to validate effective SSH settings')
+    parser.add_argument('--user', help='existing account used to validate effective SSH settings; required for install')
     parser.add_argument('--no-reload', action='store_true', help='validate configuration without reloading SSH')
     args = parser.parse_args()
+    if args.action == 'install' and not args.user:
+        parser.error('--user is required for install')
     if os.geteuid() != 0:
         parser.error('installation requires root; build first, then use sudo python3 install.py')
     try:
-        (install if args.action == 'install' else uninstall)(args)
-    except (OSError, RuntimeError, KeyError, subprocess.CalledProcessError) as error:
-        print(f'Installation failed: {error}', file=sys.stderr)
+        if args.action == 'install':
+            install(args)
+        else:
+            uninstall(args)
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.CalledProcessError) as error:
+        print(f'{args.action.capitalize()} failed: {error}', file=sys.stderr)
         if isinstance(error, subprocess.CalledProcessError):
             print(error.stderr, file=sys.stderr)
         return 1
