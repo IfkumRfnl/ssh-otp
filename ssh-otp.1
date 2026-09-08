@@ -1,0 +1,65 @@
+.TH SSH-OTP 1 "September 2026" "ssh-otp" "User Commands"
+.SH NAME
+ssh-otp \- issue a single-use SSH passphrase for an existing account
+.SH SYNOPSIS
+.B ssh-otp
+.I username duration
+.SH DESCRIPTION
+Prints four independently random EFF wordlist words separated by equals signs.
+The credential permits one SSH authentication, not one command or session.
+It is consumed before authentication success is returned and cannot be replayed.
+A failed account check or disconnected client does not restore it.
+.PP
+Duration is a positive integer followed by s, m, or h; minimum 1s, maximum 1h.
+For example: ssh-otp hayk 10m.
+The issuer waits until use, expiry, replacement, or interruption.
+Ctrl-C, SIGHUP and SIGTERM revoke an outstanding credential.
+SIGKILL or a crash may leave it usable until its original deadline; expiry is
+independently enforced by the PAM module using the boot clock, including suspend.
+Expired bookkeeping is removed on the next access or reboot.
+.PP
+Five incorrect candidate passphrases invalidate the outstanding credential.
+Issuing a new credential replaces the previous one. Existing sessions continue
+after consumption, revocation or expiry. The credential is not a sudo password.
+.PP
+Non-root callers may issue only for their real UID. Root may issue for any existing
+account. No accounts are created and no account, SSH authorization or sudo
+restrictions are removed. Secret output requires a terminal.
+.SH CLIENT
+Use the existing Windows OpenSSH client: ssh username@server.
+If a client disables interactive authentication, use:
+.PP
+ssh -o PreferredAuthentications=keyboard-interactive username@server
+.PP
+Verify the server host-key fingerprint through a trusted channel.
+.SH SECURITY
+This avoids placing a reusable SSH key on a borrowed computer. It does not
+protect against malware controlling the client, stealing the phrase before use,
+controlling the session, or capturing a reusable sudo password.
+Do not enable SSH agent forwarding to an untrusted computer.
+.PP
+The CLI is installed root-owned with mode 4755. The PAM module and credential
+store must remain root-controlled. Store files contain salted SHA-256 verifiers,
+not plaintext. Four words from 7776 entries provide approximately 51.7 bits.
+An attacker with root access can subvert authentication regardless of this tool.
+.SH FILES
+.TP
+/run/ssh-otp
+Root-only, locked runtime credential store; cleared at reboot.
+.TP
+/etc/pam.d/sshd
+Installer replaces common-auth with the burner-only module. Other PAM service
+files are untouched. Account and session policies remain in place.
+.TP
+/etc/ssh/sshd_config.d/00-ssh-otp.conf
+Enables PAM keyboard-interactive and preserves public-key access. Ordinary SSH
+password authentication remains disabled.
+.SH EXIT STATUS
+0 for consumed, invalidated, expired or replaced credentials; 1 on error;
+128 plus signal number for a caught interruption.
+.SH SOURCE
+https://github.com/IfkumRfnl/ssh-otp
+.SH WORDLIST
+EFF large wordlist by Joseph Bonneau, published July 2016, CC BY 3.0:
+https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
+https://creativecommons.org/licenses/by/3.0/
