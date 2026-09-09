@@ -49,7 +49,7 @@ def main():
             recipe.write_text(f'FROM {image}\nRUN {packages}\n')
             subprocess.run(command + ['build', '--pull=always', '-t', tag, '-f', str(recipe), directory], check=True)
     print(f'Running {args.distro} source build and SSH/PAM smoke test on private loopback.', flush=True)
-    # No privileges, host networking, published ports or writable source mounts.
+    # No privileged mode, host networking, published ports or writable source mounts.
     # Container namespace root owns only its disposable writable filesystem.
     script = '''set -eu
 mkdir -p /work
