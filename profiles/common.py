@@ -15,6 +15,7 @@ class Profile:
     retained_auth_includes: tuple[str, ...] = ()
     packages: tuple[str, ...] = ()
     selinux: bool = False
+    pam_vendor_dirs: tuple[str, ...] = ()
 
 
 # These implement the old password branch, not independent authorization gates.

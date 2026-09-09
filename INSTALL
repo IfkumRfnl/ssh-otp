@@ -1,150 +1,229 @@
 ssh-otp — single-use SSH passphrases
 ===================================
 
-Build on Debian with Zig 0.16.0 and libc development headers:
+Build on the target Linux system with Zig 0.16.0 and its native C development
+headers/toolchain:
 
     mise exec -- zig build -Doptimize=ReleaseSafe
     mise exec -- zig build test -Doptimize=ReleaseSafe
 
-Or invoke your installed Zig 0.16.0 directly. There are no third-party Zig
-packages, package downloads, PAM development headers, or resident daemons.
-Debian's libc development headers (libc6-dev), OpenSSH server and PAM runtime
-are required. Python 3 is used for installation, not authentication.
+Or invoke Zig 0.16.0 directly. There are no third-party Zig packages or package
+fetches. Zig compiles the small included C ABI boundary for libc's stat, timespec
+and rlimit types; authentication and credential management remain in Zig.
+Python 3.10+ is used for installation, not login. OpenSSH with Linux-PAM support
+and the system PAM runtime are required.
 
-Install (keep an existing trusted SSH-key session open):
+Distribution profiles
+---------------------
+
+The installer detects /etc/os-release and chooses an audited profile:
+
+    Debian / Ubuntu     common-auth; ssh.service (sshd alias)
+    Fedora / RHEL       password-auth / postlogin; sshd.service
+    Arch Linux          system-remote-login / system-login / system-auth;
+                        sshd.service
+    Alpine Linux        base-auth; OpenRC sshd; PAM-capable sshd.pam executable
+
+Install build/runtime prerequisites with your distribution's package manager.
+Typical package sets (not an instruction to replace existing authentication):
+
+    Debian/Ubuntu:  build-essential openssh-server libpam-modules libpam-runtime python3
+    Fedora:         gcc glibc-devel openssh-server pam authselect python3
+    Arch:           base-devel openssh pam pambase python
+    Alpine:         build-base openssh-server-pam openssh-server-common-openrc
+                    linux-pam python3
+
+Unknown distributions are not guessed from a vaguely related ID_LIKE value.
+An administrator may explicitly choose --profile debian|fedora|arch|alpine after
+reviewing the actual layout. Profiles recursively inspect their authentication
+includes, retain recognized authorization gates and preserve root account,
+session and password-management rules. Unknown auth modules, custom MFA,
+unsupported control flow, include cycles and hidden password fallbacks are
+rejected rather than silently removed. System-wide PAM/authselect files are read,
+not rewritten; only the SSH service PAM file is changed.
+
+Profiles are not a promise that every customized PAM stack, service manager,
+architecture or distribution derivative works. Primary packaging sources and
+fixture provenance are in tests/fixtures/<profile>/SOURCE.
+
+Install
+-------
+
+First establish working SSH-key access and keep that trusted session open.
+The supported starting SSH configuration is key-only authentication, with
+PasswordAuthentication no and KbdInteractiveAuthentication no. Existing
+multi-factor AuthenticationMethods policies are not silently replaced.
 
     sudo python3 install.py install --user hayk
 
-The build is deliberately separate: never run the Zig build as root.
-The installer installs a root-owned setuid CLI and a root-owned PAM shared
-library, replaces only sshd's standard common-auth include with the burner-only
-module, validates effective SSH settings, and reloads ssh.service. It does not
-restart SSH, create users, change passwords, change sudo policy, or remove
-AllowUsers, AllowGroups, PermitRootLogin or other SSH account restrictions.
+Build before using sudo; do not build as host root. Installation requires an
+explicit --user to check effective SSH settings; this does not restrict burner
+issuance to that account. Account creation, AllowUsers/AllowGroups, root-login
+restrictions and sudo policy remain the administrator's responsibility.
 
-The supported starting configuration is Debian's standard PAM include structure
-and key-only SSH authentication. Customized authentication stacks and existing
-multi-factor policies are rejected rather than silently weakened. Configurations
-with Match rules or external Includes require administrator review; the installer
-checks effective settings for --user at localhost, not every possible SSH context.
-Installation requires an explicit --user; no account name is assumed.
+The CLI is root-owned mode 4755. The PAM module and runtime store are root-controlled.
+The CLI filesystem must permit setuid execution. SSH's ordinary password method
+stays disabled; the separate keyboard-interactive PAM method accepts burners.
+The installer requires an effective /etc/ssh/sshd_config.d/*.conf include and
+validates that its drop-in actually takes effect. If configuration conflicts,
+it rolls back rather than guessing where to insert authentication directives.
 
-Use --no-reload to stage and validate without reloading ssh.service:
+Optional overrides:
+
+    sudo python3 install.py install --user hayk --profile arch
+    sudo python3 install.py install --user hayk --sshd-path /usr/sbin/sshd --service sshd
+
+The installer discovers a trusted sshd executable and the loaded systemd SSH
+unit, or OpenRC's SSH service. It reloads, never restarts or unexpectedly starts
+a service. A socket-activated but inactive service may require administrator
+activation before reload; automatic installation will roll back on reload failure.
+Only the selected user's localhost SSH context is checked. Administrators must
+review additional Match blocks and external configuration includes.
+
+Use --no-reload for offline/staged installation and reload the correct service
+when ready:
 
     sudo python3 install.py install --user hayk --no-reload
-    sudo systemctl reload ssh
+    sudo systemctl reload ssh       # Debian/Ubuntu
+    sudo systemctl reload sshd      # Fedora/Arch
+    sudo rc-service sshd reload     # Alpine/OpenRC
+
+Alpine: the default sshd binary is not PAM-capable. Install openssh-server-pam;
+the installer uses sshd.pam. OpenRC can select it when UsePAM is enabled, but
+reloading an already-running non-PAM executable cannot turn it into sshd.pam.
+The installer refuses that case. Migrate the daemon through a trusted session
+before installing; it will not restart your SSH service to perform the migration.
+
+SELinux: a rootless container cannot validate enforcing domain transitions or
+runtime-store permissions. On enforcing hosts, installation refuses by default.
+Provision and test a policy for the actual SSH authentication domain, the issuer,
+and /run/ssh-otp, including persistent file contexts/creation labels. Only then
+use --selinux-policy-reviewed to acknowledge that administrator-supplied policy.
+The installer applies restorecon after file replacement when SELinux is active;
+this does not create policy or prove the credential store is accessible. It never
+disables SELinux, makes it permissive, or grants broad permissions automatically.
 
 Keep the trusted session open until a second session succeeds. Installation and
 uninstallation attempt rollback on errors, including failures during backup or
 cleanup. Recovery failures are reported separately from the original error;
 recovery files are retained when rollback cannot finish. A PAM module still
 required by the active configuration is not removed during failed recovery.
-SIGKILL or a machine failure may require manual recovery using
-/var/lib/ssh-otp-install/sshd.pam.original; transactions are not guaranteed across
-power loss. Re-running installation with existing state is refused. Uninstall
-before reinstalling.
+SIGKILL or power loss may require manual recovery using
+/var/lib/ssh-otp-install/sshd.pam.original; transactions are not power-loss-atomic.
+Installation with existing state is refused. Uninstall before reinstalling.
 
-Usage from a trusted server session:
+Usage
+-----
+
+From a trusted server session:
 
     ssh-otp hayk 10m
 
-Type the displayed phrase at the SSH prompt on Windows:
+On the standard Windows SSH client:
 
     ssh hayk@server
 
-If needed, explicitly choose the supported authentication method:
+If necessary, explicitly select the authentication method:
 
     ssh -o PreferredAuthentications=keyboard-interactive hayk@server
 
-No download or SSH key is required on Windows. Obtain the server's host-key
-fingerprint through your trusted session and verify it on first connection.
+No client download or SSH key is needed on Windows. Verify the server host-key
+fingerprint through the trusted session before accepting it on the client.
 
 Only existing users are supported. Non-root issuers can target only their real
-UID; root can target any existing account. Existing SSH account restrictions
-still apply, so issuance does not guarantee that an account is allowed to log in.
-The executable must reside on a filesystem that permits setuid execution.
+UID; root can target any existing account. SSH account restrictions still apply,
+so issuance does not guarantee the account is allowed to log in.
 
-Four uniformly random EFF words are joined by '='. Four EFF entries contain
-hyphens, which are retained. Four words provide about 51.7 bits of entropy.
-The phrase is printed once, only to a terminal, and is never stored in plaintext.
-Your terminal scrollback may retain it. There is one outstanding phrase per UID.
-A new issuance replaces the previous phrase. Five incorrect candidate phrases
-invalidate it, so a remote attacker can cause denial of service to an issuance.
+Four uniformly random EFF words are joined by '=' (about 51.7 bits of entropy).
+Four EFF entries contain hyphens, which are retained. The phrase is shown once,
+only to a terminal, and is never stored in plaintext. Terminal scrollback may
+retain it. One phrase can be outstanding per UID; a new issuance replaces it.
+Five incorrect candidates invalidate a phrase, so an attacker can cause denial
+of service to an issuance.
 
-Without an active burner, PAM rejects keyboard-interactive authentication before
-asking for a password. Missing, expired, consumed and revoked burners all produce
-the same generic SSH authentication failure, with no burner-specific explanation.
-The SSH method remains configured; key authentication is unchanged.
+Without an active burner, the module rejects before asking for a password.
+Missing, expired, consumed and revoked burners receive no burner-specific
+explanation. The SSH method remains configured; key authentication is unchanged.
+Preserved distro authorization gates can still enforce and report their own policy.
 
-Duration is a positive integer with s, m, or h suffix, from 1s through 1h.
-The deadline is measured in boot-clock seconds, including suspend; precision is
-one second. Authentication consumes the phrase atomically, even if subsequent
-account checks fail or the client disconnects. The established session is not
-terminated by expiry. This is an SSH credential, NOT a sudo credential.
+Duration is an integer with s/m/h suffix from 1s to 1h. The boot clock includes
+suspend, with one-second precision. Authentication consumes the phrase atomically,
+even if later account checks fail or the client disconnects. Established sessions
+continue after expiry. The burner is not a sudo credential.
 
-Ctrl-C, SIGTERM and SIGHUP revoke an outstanding phrase. A killed/crashed issuer
-may leave the phrase active until its original deadline. PAM enforces that
-original expiry independently. Stale expired records are removed on access or
-reboot; the /run store is deliberately not persistent.
+Ctrl-C, SIGTERM and SIGHUP revoke outstanding credentials. A killed/crashed issuer
+may leave one active until its original deadline; PAM enforces expiry independently.
+Expired records are removed on access or reboot. The /run store is not persistent.
 
-An untrusted client can steal the phrase before use or control your session.
-It can also capture a reusable sudo password. This tool avoids leaving reusable
-SSH keys behind; it does not make a compromised client trustworthy. Do not
-forward an SSH agent to it. This is new privileged authentication code, not an
-independently audited security product.
+An untrusted client can steal the phrase before use, control the session and
+capture a reusable sudo password. This avoids leaving reusable SSH keys behind;
+it does not make a compromised client trustworthy. Do not forward an SSH agent.
+This is new privileged authentication code, not an independently audited product.
 
-Uninstall:
+Uninstall
+---------
 
     sudo python3 install.py uninstall
 
-The installer removes its SSH drop-in and reloads SSH before restoring the original
-PAM file and removing binaries. This avoids enabling password-backed PAM while
-the running daemon still advertises the burner authentication method.
-Uninstall refuses to overwrite files whose contents, root ownership or expected
-permission modes have changed. Existing hash manifests remain valid; file modes
-are checked against the fixed installation policy.
-Use --no-reload for uninstall only when SSH is already stopped (as in the isolated
-test); otherwise the running daemon could use the restored password-backed PAM.
-Outstanding runtime records are removed. A failed uninstall may already have
-revoked burners even if file rollback succeeds. Existing sessions are not forcibly
-disconnected.
+Uninstall removes the SSH drop-in and reloads before restoring the original PAM
+file and removing binaries. This avoids enabling password-backed PAM while the
+running daemon still advertises burner authentication. It refuses files whose
+contents, root ownership or expected modes changed. Existing hash manifests remain
+valid; modes are checked against the fixed installation policy.
+Use --no-reload for uninstall only when SSH is stopped (as in the container tests).
+Outstanding burners are revoked, including potentially during a failed uninstall
+whose files were successfully restored. Existing sessions are not disconnected.
 
 Verification
 ------------
 
-The production CLI and PAM module are exercised using real Linux-PAM and OpenSSH
-in an isolated user/mount/network namespace and chroot. No live server config is
-changed. Run as your normal user, NOT host root:
+Fast profile/parser tests:
 
-    unshare --user --map-auto --map-root-user --mount --net \
-        python3 tests/integration.py
+    python3 -m unittest discover -s tests -p 'test_profile_*.py'
+    python3 -m unittest discover -s tests -p test_sshd_settings.py
 
-Requires working subordinate UID/GID mappings and newuidmap/newgidmap (uidmap),
-util-linux, Python 3, GCC, libc headers, iproute2, OpenSSL, and OpenSSH client/server.
-The namespace test temporarily runs an SSH daemon on its private loopback only.
-It uses the production binaries from zig-out, not a privilege-relaxed test build.
-It verifies real-UID restrictions, unknown users, bounds, redirect rejection,
-concurrent consumption, attempt limits, replacement, interruption, expiry even
-after SIGKILL, real key and burner logins, continued sessions after expiry,
-replay rejection, Unix-password rejection, prompt-free rejection of inactive
-burners, uninstall restoration and rollback when effective SSH configuration
-conflicts with the installation.
-
-Installer failure-path regressions use temporary filesystem fixtures and injected
-I/O failures, without changing system configuration:
+Installer failure-path tests use temporary fixtures and injected I/O failures.
+Run as your normal user with subordinate UID/GID mappings (uidmap), not host root:
 
     unshare --user --map-auto --map-root-user \
         python3 -m unittest discover -s tests -p test_install.py -v
 
-These cover backup failure, partial uninstall, failed recovery, malformed
-manifests, modified file metadata and explicit account selection.
+The existing Debian namespace scenario uses the host's OpenSSH/PAM libraries:
+
+    unshare --user --map-auto --map-root-user --mount --net \
+        python3 tests/integration.py
+
+For native distro verification, use rootless Podman (no Docker daemon, no VM,
+no init-system boot). Each minimal image installs its actual OpenSSH/PAM packages,
+compiles the source with the mounted Zig toolchain, then exercises real key and
+burner SSH logins on private loopback with a pinned host key:
+
+    mise exec -- python3 tests/containers.py debian
+    mise exec -- python3 tests/containers.py ubuntu
+    mise exec -- python3 tests/containers.py fedora
+    mise exec -- python3 tests/containers.py arch
+    mise exec -- python3 tests/containers.py alpine
+
+Alternatively pass --zig-dir /path/to/zig-installation (contains zig and lib/).
+Use --rebuild to refresh base images/packages. Container runtime networking is
+none; no ports are published and source/toolchain mounts are read-only. Containers
+are removed afterward; test images and per-distro Zig cache volumes remain cached.
+Build packages/toolchain consume more storage than the idle SSH daemon: minimal
+here means isolated processes without a full OS boot, not zero build dependencies.
+
+These tests check native source compilation, credential lifecycle, real packaged
+PAM account/session policy, key and burner login, session survival past expiry,
+replay and Unix-password rejection, prompt-free inactive rejection, and original
+PAM restoration. They do NOT boot/test systemd or OpenRC reloads, nor establish
+SELinux enforcement compatibility. RHEL-derived layouts are source-fixture
+verified; Fedora is the runtime representative, not a substitute for RHEL tests.
 
 Wordlist attribution
 --------------------
 
-src/words.txt is EFF's large wordlist by Joseph Bonneau (July 2016), with the
-five-digit dice labels removed and word order retained. EFF content is licensed
-CC BY 4.0 unless otherwise noted. The wordlist is embedded at build time.
+src/words.txt is EFF's large wordlist by Joseph Bonneau (July 2016), with dice labels
+removed and word order retained. EFF content is CC BY 4.0 unless otherwise noted.
+The wordlist is embedded at build time.
 
 https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
 https://www.eff.org/dice

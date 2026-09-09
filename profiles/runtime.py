@@ -4,17 +4,14 @@ import os
 import shutil
 import subprocess
 
+from .filesystem import trusted_file
+
 
 def executable(name):
     path = shutil.which(name)
     if not path:
         raise RuntimeError(f'required executable not found: {name}')
-    resolved = Path(path).resolve()
-    for item in (resolved, *resolved.parents):
-        info = item.stat()
-        if info.st_uid != 0 or info.st_mode & 0o022:
-            raise RuntimeError(f'unsafe executable path: {item}')
-    return str(resolved)
+    return str(trusted_file(path))
 
 
 def sshd_path(profile, override=None):

@@ -9,6 +9,7 @@ PROFILE = Profile(
     systemd_services=(),
     openrc_service='sshd',
     auth_includes=('base-auth',),
+    pam_vendor_dirs=('/usr/lib/pam.d',),
     retained_auth_modules=('pam_nologin.so', 'pam_env.so',
                            'pam_gnome_keyring.so', 'pam_kwallet5.so'),
     packages=('openssh-server-pam', 'openssh-server-common-openrc', 'linux-pam',

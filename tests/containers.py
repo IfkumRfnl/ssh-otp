@@ -51,11 +51,20 @@ def main():
     print(f'Running {args.distro} source build and SSH/PAM smoke test on private loopback.', flush=True)
     # No privileges, host networking, published ports or writable source mounts.
     # Container namespace root owns only its disposable writable filesystem.
+    script = '''set -eu
+mkdir -p /work
+cp -R /src/src /src/profiles /src/tests /src/build.zig /src/install.py /src/ssh-otp.1 /work/
+cd /work
+/opt/zig/zig build -j2 -Doptimize=ReleaseSafe --summary all
+/opt/zig/zig build test -j2 -Doptimize=ReleaseSafe --summary all
+python3 -m unittest discover -s tests -p test_filesystem.py -v
+python3 tests/distro_smoke.py
+'''
     subprocess.run(command + ['run', '--rm', '--network=none', '--name', f'ssh-otp-test-{args.distro}',
         '-v', f'{ROOT}:/src:ro', '-v', f'{zig.resolve()}:/opt/zig:ro',
         '-v', f'ssh-otp-zig-cache-{args.distro}:/root/.cache/zig',
         '-v', f'ssh-otp-build-cache-{args.distro}:/work/.zig-cache', tag,
-        '/bin/sh', '-c', 'mkdir -p /work && cp -R /src/src /src/profiles /src/tests /src/build.zig /src/install.py /src/ssh-otp.1 /work/ && cd /work && /opt/zig/zig build -j2 -Doptimize=ReleaseSafe && /opt/zig/zig build test -j2 -Doptimize=ReleaseSafe && python3 tests/distro_smoke.py'], check=True)
+        '/bin/sh', '-c', script], check=True)
     print(f'PASS: {args.distro} source build, unit tests and native SSH/PAM smoke', flush=True)
 
 

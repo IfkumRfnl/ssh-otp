@@ -14,6 +14,7 @@ import tempfile
 
 from profiles import select_profile
 from profiles.common import patch_pam
+from profiles.filesystem import safe_parent, trusted_file
 from profiles.runtime import check_pam_daemon, check_security, restore_labels, service_command, sshd_path
 
 RUNTIME = Path('/run/ssh-otp')
@@ -68,13 +69,6 @@ def report_recovery(errors):
         print(f'Keep your trusted session open; inspect recovery files in {STATE}.', file=sys.stderr)
 
 
-def safe_parent(path):
-    for directory in [*reversed(path.parent.parents), path.parent]:
-        if not directory.exists() and not directory.is_symlink():
-            directory.mkdir(mode=0o755)
-        info = directory.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
-            raise RuntimeError(f'unsafe installation directory: {directory}')
 
 
 def replace(path, data, mode=0o644):
@@ -143,9 +137,9 @@ def install(args):
     original = read_owned_file(PAM, 0o644)
     profile = select_profile(getattr(args, 'profile', None))
     def read_include(name):
-        resolved = (PAM.parent / name).resolve(strict=True)
-        safe_parent(resolved)
-        return read_owned_file(resolved, 0o644).decode()
+        candidates = [PAM.parent / name, *(Path(directory) / name for directory in profile.pam_vendor_dirs)]
+        selected = next((path for path in candidates if path.exists() or path.is_symlink()), candidates[0])
+        return read_owned_file(trusted_file(selected), 0o644).decode()
     patched = patch_pam(original.decode(), str(MODULE), profile, read_include).encode()
     effective = command(SSHD, '-T', '-C', f'user={args.user},host=localhost,addr=127.0.0.1')
     settings = parse_sshd_settings(effective)
