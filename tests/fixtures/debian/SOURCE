@@ -1,0 +1,53 @@
+Inspected release sources: Debian 13 (trixie), openssh 1:10.0p1-7;
+Ubuntu 24.04 LTS (noble), openssh 1:9.6p1-3ubuntu13, pam 1.5.3-5ubuntu5.
+These are inspected release snapshots, not claims about latest security updates.
+
+Debian OpenSSH packaging, Debian SSH maintainers:
+https://salsa.debian.org/ssh-team/openssh/-/raw/debian/1%2510.0p1-7/debian/openssh-server.sshd.pam.in
+https://salsa.debian.org/ssh-team/openssh/-/raw/debian/1%2510.0p1-7/debian/rules
+https://salsa.debian.org/ssh-team/openssh/-/raw/debian/1%2510.0p1-7/debian/systemd/ssh.service
+https://salsa.debian.org/ssh-team/openssh/-/raw/debian/1%2510.0p1-7/debian/patches/debian-config.patch
+
+Ubuntu OpenSSH packaging, Ubuntu developers:
+https://git.launchpad.net/ubuntu/+source/openssh/plain/debian/changelog?h=ubuntu/noble
+https://git.launchpad.net/ubuntu/+source/openssh/plain/debian/openssh-server.sshd.pam.in?h=ubuntu/noble
+https://git.launchpad.net/ubuntu/+source/openssh/plain/debian/systemd/ssh.service?h=ubuntu/noble
+https://git.launchpad.net/ubuntu/+source/openssh/plain/debian/systemd/ssh.socket?h=ubuntu/noble
+https://git.launchpad.net/ubuntu/+source/openssh/plain/debian/README.Debian?h=ubuntu/noble
+https://git.launchpad.net/ubuntu/+source/openssh/plain/debian/patches/debian-config.patch?h=ubuntu/noble
+
+Ubuntu PAM packaging, Debian/Ubuntu PAM maintainers:
+https://git.launchpad.net/ubuntu/+source/pam/plain/debian/changelog?h=ubuntu/noble
+https://git.launchpad.net/ubuntu/+source/pam/plain/debian/local/common-auth?h=ubuntu/noble
+https://git.launchpad.net/ubuntu/+source/pam/plain/debian/local/common-account?h=ubuntu/noble
+https://git.launchpad.net/ubuntu/+source/pam/plain/debian/local/common-session?h=ubuntu/noble
+https://git.launchpad.net/ubuntu/+source/pam/plain/debian/local/common-password?h=ubuntu/noble
+https://git.launchpad.net/ubuntu/+source/pam/plain/debian/pam-configs/unix?h=ubuntu/noble
+
+# Fixture simplification: sshd contains every active Debian Linux directive;
+# standalone comments and blank lines are omitted. @IF_KEYINIT@ is expanded
+# exactly as debian/rules does for Linux. Ubuntu differs in its locale pam_env
+# directive: user_readenv=1 precedes envfile=/etc/default/locale. The test
+# exercises that variant without duplicating an otherwise identical fixture.
+# common-auth/account/password are comment-free Unix-only expansions of
+# the Ubuntu pam-auth-update templates plus pam-configs/unix Auth-Initial,
+# Account-Initial and Password-Initial, resolving success=end to success=1.
+# No optional additional package profiles are selected. These are explicit
+# template expansions, not files captured from a running distribution.
+# common-session is a minimal exact directive excerpt (pam_umask from the
+# template, pam_unix from the Unix profile); generated primary boilerplate
+# and optional additional package profiles are omitted. Tests audit include
+# types and retention, not a complete running host's session policy.
+
+Platform caveats:
+Both inspected packages use ssh.service (alias sshd.service), /usr/sbin/sshd,
+and an early Include /etc/ssh/sshd_config.d/*.conf directive. Existing local
+sshd_config overrides still require effective-configuration validation.
+Debian installs ssh.socket without enabling it by default. Noble defaults
+to socket activation: ssh.socket has Accept=no and activates ssh.service;
+its generator reads configured ports/addresses. Authentication-only changes
+do not require modifying listening sockets. An inactive ssh.service with
+an active ssh.socket is not an absent SSH installation.
+No uninspected derivatives are claimed through ID_LIKE. Non-systemd service
+managers were not inspected. Debian's PAM template retains SELinux session
+rules even when the host does not have enforcing SELinux enabled.
