@@ -40,11 +40,14 @@ class InstallerRecoveryTests(unittest.TestCase):
         self.stack.enter_context(patch.object(installer, 'FILE_MODES', self.modes, create=True))
         self.stack.enter_context(patch.object(installer, '__file__', str(self.root / 'install.py')))
         self.stack.enter_context(patch.object(installer, 'safe_parent', self.safe_parent))
+        self.stack.enter_context(patch('profiles.filesystem.safe_parent', self.safe_parent))
         self.stack.enter_context(patch.object(installer, 'command', self.command))
         self.stack.enter_context(patch.object(installer, 'validate', lambda user: None))
-        self.args = SimpleNamespace(user='root', no_reload=True)
+        self.stack.enter_context(patch.object(installer, 'configure_platform', lambda args: None))
+        self.args = SimpleNamespace(user='root', no_reload=True, profile='debian')
         self.original = b'@include common-auth\n@include common-account\n@include common-session\n@include common-password\n'
         self.write(installer.PAM, self.original)
+        self.write(installer.PAM.parent / 'common-auth', b'auth required pam_unix.so\n')
         for name, content in [('account', b'account required pam_unix.so\n'),
                               ('session', b'session required pam_permit.so\n'),
                               ('password', b'password required pam_unix.so\n')]:
@@ -54,10 +57,13 @@ class InstallerRecoveryTests(unittest.TestCase):
         self.write(self.root / 'ssh-otp.1', b'test manual')
         self.stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
 
-    def safe_parent(self, path):
+    def safe_parent(self, path, *, create=True):
         if not path.is_relative_to(self.root):
             raise AssertionError(f'fixture escaped temporary directory: {path}')
-        path.parent.mkdir(parents=True, exist_ok=True)
+        if create:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        elif not path.parent.is_dir():
+            raise FileNotFoundError(path.parent)
 
     def write(self, path, data, mode=0o644):
         self.safe_parent(path)
