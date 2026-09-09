@@ -10,17 +10,15 @@ const Passwd = extern struct {
     pw_dir: ?[*:0]u8,
     pw_shell: ?[*:0]u8,
 };
-const Rlimit = extern struct { current: c_ulong, maximum: c_ulong };
-const Timespec = extern struct { seconds: c_long, nanoseconds: c_long };
 const Handler = *const fn (c_int) callconv(.c) void;
 extern "c" fn getpwnam(name: [*:0]const u8) ?*const Passwd;
 extern "c" fn getuid() u32;
 extern "c" fn geteuid() u32;
 extern "c" fn isatty(fd: c_int) c_int;
-extern "c" fn setrlimit(resource: c_int, limits: *const Rlimit) c_int;
+extern "c" fn ssh_otp_disable_core_dumps() c_int;
 extern "c" fn signal(number: c_int, handler: ?Handler) ?Handler;
 extern "c" fn write(fd: c_int, buffer: [*]const u8, count: usize) isize;
-extern "c" fn nanosleep(request: *const Timespec, remaining: ?*Timespec) c_int;
+extern "c" fn ssh_otp_sleep(milliseconds: u32) c_int;
 extern "c" fn __errno_location() *c_int;
 
 var caught_signal: c_int = 0;
@@ -108,8 +106,7 @@ fn monitor(uid: u32, ticket: *core.Ticket) !Outcome {
             .expired => return .expired,
             .replaced => return .replaced,
         }
-        const delay: Timespec = .{ .seconds = 0, .nanoseconds = 200_000_000 };
-        if (nanosleep(&delay, null) != 0 and __errno_location().* != 4) return error.SleepFailed;
+        if (ssh_otp_sleep(200) != 0 and __errno_location().* != 4) return error.SleepFailed;
     }
 }
 
@@ -122,8 +119,7 @@ fn run(argc: c_int, argv: [*][*:0]u8) !c_int {
     const duration = try parseDuration(std.mem.span(argv[2]));
     if (std.mem.span(argv[1]).len == 0) return error.UnknownUser;
 
-    const no_core: Rlimit = .{ .current = 0, .maximum = 0 };
-    if (setrlimit(4, &no_core) != 0) return error.CoreDumpSetupFailed;
+    if (ssh_otp_disable_core_dumps() != 0) return error.CoreDumpSetupFailed;
     const real_uid = getuid();
     // Copy the UID immediately: getpwnam returns libc-owned static storage.
     const target_uid = (getpwnam(argv[1]) orelse return error.UnknownUser).pw_uid;

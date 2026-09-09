@@ -11,6 +11,7 @@ const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("time.h");
     @cInclude("errno.h");
+    @cInclude("platform.h");
 });
 
 pub const Ticket = struct { token: [16]u8, phrase: [160]u8, phrase_len: usize };
@@ -37,10 +38,10 @@ fn random(bytes: []u8) !void {
 }
 
 fn now() !u64 {
-    var ts: c.struct_timespec = undefined;
+    var seconds: u64 = undefined;
     // Includes time spent suspended; /run records disappear on reboot.
-    if (c.clock_gettime(c.CLOCK_BOOTTIME, &ts) != 0 or ts.tv_sec < 0) return error.ClockUnavailable;
-    return @intCast(ts.tv_sec);
+    if (c.ssh_otp_boottime(&seconds) != 0) return error.ClockUnavailable;
+    return seconds;
 }
 
 fn verifier(token: [16]u8, phrase: []const u8) [32]u8 {
@@ -61,12 +62,12 @@ const Store = struct {
         const dir = c.open(path, c.O_RDONLY | c.O_DIRECTORY | c.O_NOFOLLOW | c.O_CLOEXEC);
         if (dir < 0) return error.UnsafeStore;
         errdefer _ = c.close(dir);
-        var st: c.struct_stat = undefined;
-        if (c.fstat(dir, &st) != 0 or st.st_uid != c.geteuid() or st.st_mode & 0o7777 != 0o700) return error.UnsafeStore;
+        var st: c.struct_ssh_otp_file_info = undefined;
+        if (c.ssh_otp_fstat(dir, &st) != 0 or st.uid != c.geteuid() or st.mode & 0o7777 != 0o700) return error.UnsafeStore;
         const lock = c.openat(dir, ".lock", c.O_RDWR | c.O_CREAT | c.O_NOFOLLOW | c.O_CLOEXEC | c.O_NONBLOCK, @as(c_uint, 0o600));
         if (lock < 0) return error.UnsafeStore;
         errdefer _ = c.close(lock);
-        try safeFile(lock);
+        _ = try safeFile(lock);
         while (c.flock(lock, c.LOCK_EX) != 0) {
             if (c.__errno_location().* != c.EINTR) return error.LockFailed;
         }
@@ -90,9 +91,8 @@ const Store = struct {
             return error.RecordUnavailable;
         }
         defer _ = c.close(fd);
-        try safeFile(fd);
-        var st: c.struct_stat = undefined;
-        if (c.fstat(fd, &st) != 0 or st.st_size != 64) return error.CorruptRecord;
+        const st = try safeFile(fd);
+        if (st.size != 64) return error.CorruptRecord;
         var record: Record = undefined;
         var offset: usize = 0;
         while (offset < record.len) {
@@ -111,7 +111,7 @@ const Store = struct {
         const fd = c.openat(self.dir, filename, c.O_WRONLY | c.O_CREAT | c.O_NOFOLLOW | c.O_CLOEXEC | c.O_NONBLOCK, @as(c_uint, 0o600));
         if (fd < 0) return error.RecordUnavailable;
         defer _ = c.close(fd);
-        try safeFile(fd);
+        _ = try safeFile(fd);
         // Under the global lock, interrupted writes are either absent or malformed:
         // readers never accept a partial record. No rename can change the lock inode.
         errdefer _ = c.unlinkat(self.dir, filename, 0);
@@ -131,9 +131,10 @@ const Store = struct {
     }
 };
 
-fn safeFile(fd: c_int) !void {
-    var st: c.struct_stat = undefined;
-    if (c.fstat(fd, &st) != 0 or st.st_uid != c.geteuid() or st.st_mode & c.S_IFMT != c.S_IFREG or st.st_mode & 0o7777 != 0o600 or st.st_nlink != 1) return error.UnsafeStore;
+fn safeFile(fd: c_int) !c.struct_ssh_otp_file_info {
+    var st: c.struct_ssh_otp_file_info = undefined;
+    if (c.ssh_otp_fstat(fd, &st) != 0 or st.uid != c.geteuid() or st.mode & c.S_IFMT != c.S_IFREG or st.mode & 0o7777 != 0o600 or st.nlink != 1) return error.UnsafeStore;
+    return st;
 }
 
 fn issueAt(path: [:0]const u8, uid: u32, seconds: u32) !Ticket {
@@ -278,8 +279,7 @@ test "expiry is enforced by authentication without issuer" {
     var tmp = try TestStore.init();
     defer tmp.deinit();
     const ticket = try issueAt(tmp.slice(), 1000, 1);
-    var delay: c.struct_timespec = .{ .tv_sec = 1, .tv_nsec = 10000000 };
-    _ = c.nanosleep(&delay, null);
+    _ = c.ssh_otp_sleep(1010);
     try std.testing.expect(!(try authenticateAt(tmp.slice(), 1000, ticket.phrase[0..ticket.phrase_len])));
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install/uninstall ssh-otp on Debian. Build as your normal user first."""
+"""Install/uninstall ssh-otp using an audited Linux PAM/service profile."""
 import argparse
 import hashlib
 import json
@@ -12,6 +12,10 @@ import subprocess
 import sys
 import tempfile
 
+from profiles import select_profile
+from profiles.common import patch_pam
+from profiles.runtime import check_pam_daemon, check_security, restore_labels, service_command, sshd_path
+
 RUNTIME = Path('/run/ssh-otp')
 STATE = Path('/var/lib/ssh-otp-install')
 PAM = Path('/etc/pam.d/sshd')
@@ -20,6 +24,7 @@ CLI = Path('/usr/local/bin/ssh-otp')
 MODULE = Path('/usr/local/lib/security/pam_ssh_otp.so')
 MAN = Path('/usr/local/share/man/man1/ssh-otp.1')
 SSHD = '/usr/sbin/sshd'
+RELOAD_COMMAND = None
 FILE_MODES = {CLI: 0o4755, MODULE: 0o644, MAN: 0o644, DROPIN: 0o644}
 CONFIG = b'''# Managed by ssh-otp. Account restrictions remain in sshd_config.
 UsePAM yes
@@ -83,14 +88,25 @@ def replace(path, data, mode=0o644):
             os.fchmod(output.fileno(), mode)
             os.fsync(output.fileno())
         os.replace(temporary, path)
+        restore_labels(path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def parse_sshd_settings(output):
+    # OpenSSH 10.5 prints canonical mixed-case keywords; older releases print
+    # lowercase. SSH configuration keywords are case-insensitive in either form.
+    settings = {}
+    for line in output.splitlines():
+        key, value = line.split(None, 1)
+        settings[key.lower()] = value.strip()
+    return settings
 
 
 def validate(user):
     command(SSHD, '-t')
     output = command(SSHD, '-T', '-C', f'user={user},host=localhost,addr=127.0.0.1')
-    settings = dict(line.split(' ', 1) for line in output.splitlines())
+    settings = parse_sshd_settings(output)
     expected = {'usepam': 'yes', 'pubkeyauthentication': 'yes',
                 'passwordauthentication': 'no', 'kbdinteractiveauthentication': 'yes',
                 'authenticationmethods': 'publickey keyboard-interactive:pam'}
@@ -101,7 +117,20 @@ def validate(user):
 
 def reload_ssh(no_reload):
     if not no_reload:
-        command('/usr/bin/systemctl', 'reload', 'ssh')
+        if RELOAD_COMMAND is None:
+            raise RuntimeError('SSH service reload was not configured')
+        command(*RELOAD_COMMAND)
+
+
+def configure_platform(args):
+    global SSHD, RELOAD_COMMAND
+    profile = select_profile(args.profile)
+    SSHD = sshd_path(profile, args.sshd_path)
+    if args.action == 'install':
+        check_security(profile, args.selinux_policy_reviewed)
+        check_pam_daemon(profile, SSHD)
+    RELOAD_COMMAND = None if args.no_reload else service_command(profile, args.service)
+    return profile
 
 
 def install(args):
@@ -112,21 +141,14 @@ def install(args):
     if STATE.exists() or STATE.is_symlink():
         raise RuntimeError(f'already installed or an interrupted install exists; inspect {STATE} before proceeding')
     original = read_owned_file(PAM, 0o644)
-    lines = original.decode().splitlines(keepends=True)
-    auth = [line for line in lines if line.strip() == '@include common-auth']
-    if len(auth) != 1 or any(line.lstrip().startswith(('auth ', 'auth\t', '-auth ', '-auth\t')) for line in lines):
-        raise RuntimeError('unsupported PAM auth stack: expected exactly one @include common-auth and no other auth rules')
-    allowed = {'@include common-auth', '@include common-account', '@include common-session', '@include common-password'}
-    if any(line.lstrip().startswith('@include') and line.strip() not in allowed for line in lines):
-        raise RuntimeError('unsupported PAM include; review it manually before installing')
-    # Included account/session/password stacks must not introduce another auth rule.
-    for include in ('common-account', 'common-session', 'common-password'):
-        for line in (PAM.parent / include).read_text().splitlines():
-            stripped = line.strip()
-            if stripped.startswith(('auth ', 'auth\t', '-auth ', '-auth\t', '@include')):
-                raise RuntimeError(f'unsupported authentication/nested include in {include}')
+    profile = select_profile(getattr(args, 'profile', None))
+    def read_include(name):
+        resolved = (PAM.parent / name).resolve(strict=True)
+        safe_parent(resolved)
+        return read_owned_file(resolved, 0o644).decode()
+    patched = patch_pam(original.decode(), str(MODULE), profile, read_include).encode()
     effective = command(SSHD, '-T', '-C', f'user={args.user},host=localhost,addr=127.0.0.1')
-    settings = dict(line.split(' ', 1) for line in effective.splitlines())
+    settings = parse_sshd_settings(effective)
     if settings.get('authenticationmethods') not in ('any', 'publickey'):
         raise RuntimeError('refusing to replace an existing multi-factor/custom AuthenticationMethods policy')
     if settings.get('passwordauthentication') != 'no' or settings.get('kbdinteractiveauthentication') != 'no':
@@ -144,10 +166,7 @@ def install(args):
     for binary in (CLI, MODULE):
         if not artifacts[binary].startswith(b'\x7fELF'):
             raise RuntimeError(f'not an ELF binary: {binary}')
-    for index, line in enumerate(lines):
-        if line.strip() == '@include common-auth':
-            lines[index] = f'auth requisite {MODULE}\n'
-    patched = ''.join(lines).encode()
+    # Existing account/session/password rules are preserved by the profile.
     manifest = {'pam_sha256': digest(patched), 'files': {}}
     for path, data in artifacts.items():
         manifest['files'][str(path)] = digest(data)
@@ -188,7 +207,7 @@ def install(args):
         raise
     print('Installed. Existing SSH account restrictions and sudo policy are unchanged.')
     if args.no_reload:
-        print('SSH was NOT reloaded. Run sudo systemctl reload ssh when ready.')
+        print('SSH was NOT reloaded. Reload the distro SSH service when ready.')
     print(f'Keep your trusted session open. Run: ssh-otp {args.user} 10m')
 
 
@@ -256,7 +275,7 @@ def uninstall(args):
         raise
     print('Uninstalled; original SSH PAM authentication restored.')
     if args.no_reload:
-        print('SSH was NOT reloaded. Run sudo systemctl reload ssh when ready.')
+        print('SSH was NOT reloaded. Reload the distro SSH service when ready.')
 
 
 def main():
@@ -264,12 +283,19 @@ def main():
     parser.add_argument('action', choices=('install', 'uninstall'))
     parser.add_argument('--user', help='existing account used to validate effective SSH settings; required for install')
     parser.add_argument('--no-reload', action='store_true', help='validate configuration without reloading SSH')
+    parser.add_argument('--profile', choices=('debian', 'fedora', 'arch', 'alpine'),
+                        help='override OS detection with an audited PAM profile')
+    parser.add_argument('--sshd-path', help='explicit PAM-capable sshd executable')
+    parser.add_argument('--service', help='override the distro SSH service name')
+    parser.add_argument('--selinux-policy-reviewed', action='store_true',
+                        help='confirm administrator-provisioned and tested SELinux policy; never disables enforcement')
     args = parser.parse_args()
     if args.action == 'install' and not args.user:
         parser.error('--user is required for install')
     if os.geteuid() != 0:
         parser.error('installation requires root; build first, then use sudo python3 install.py')
     try:
+        configure_platform(args)
         if args.action == 'install':
             install(args)
         else:

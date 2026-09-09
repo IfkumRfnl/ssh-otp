@@ -159,11 +159,15 @@ PrintMotd no
         run('mount', '-t', 'tmpfs', '-o', 'mode=755,suid', 'tmpfs', '/usr/local')
         for relative in ('bin', 'lib/security', 'share/man/man1'):
             (Path('/usr/local') / relative).mkdir(parents=True, exist_ok=True)
+        Path('/usr/local/sbin').mkdir()
+        shutil.copyfile('/usr/sbin/sshd', '/usr/local/sbin/sshd')
+        Path('/usr/local/sbin/sshd').chmod(0o755)
         # Isolate install backups as well as configuration and binaries.
         run('mount', '-t', 'tmpfs', '-o', 'mode=755', 'tmpfs', '/var/lib')
         run('ip', 'link', 'set', 'lo', 'up')
         python = sys.executable
-        installed = run(python, str(ROOT / 'install.py'), 'install', '--user', 'hayk', '--no-reload')
+        installed = run(python, str(ROOT / 'install.py'), 'install', '--user', 'hayk', '--no-reload',
+                        '--profile', 'debian', '--sshd-path', '/usr/local/sbin/sshd')
         require('Installed.' in installed.stdout, 'installation failed')
         print('PASS: installer config validation and setuid installation', flush=True)
         for target, expected in [('root', 'only root'), ('ssh-otp-nonexistent-user', 'does not exist')]:
@@ -267,12 +271,14 @@ PrintMotd no
             daemon.terminate()
             daemon.wait(timeout=5)
             log.close()
-        removed = run(python, str(ROOT / 'install.py'), 'uninstall', '--no-reload')
+        removed = run(python, str(ROOT / 'install.py'), 'uninstall', '--no-reload',
+                      '--profile', 'debian', '--sshd-path', '/usr/local/sbin/sshd')
         require('Uninstalled' in removed.stdout and not Path('/usr/local/bin/ssh-otp').exists(), 'uninstall failed')
         require('@include common-auth' in Path('/etc/pam.d/sshd').read_text(), 'original PAM not restored')
         print('PASS: uninstall restores original authentication configuration', flush=True)
         put(Path('/etc/ssh/sshd_config.d/00-conflict.conf'), 'KbdInteractiveAuthentication no\n')
-        conflict = subprocess.run([python, str(ROOT / 'install.py'), 'install', '--user', 'hayk', '--no-reload'],
+        conflict = subprocess.run([python, str(ROOT / 'install.py'), 'install', '--user', 'hayk', '--no-reload',
+                                   '--profile', 'debian', '--sshd-path', '/usr/local/sbin/sshd'],
                                   capture_output=True, text=True)
         require(conflict.returncode != 0 and 'configuration conflict' in conflict.stderr,
                 'installer accepted conflicting effective SSH configuration')

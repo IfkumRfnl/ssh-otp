@@ -42,9 +42,11 @@ class InstallerRecoveryTests(unittest.TestCase):
         self.stack.enter_context(patch.object(installer, 'safe_parent', self.safe_parent))
         self.stack.enter_context(patch.object(installer, 'command', self.command))
         self.stack.enter_context(patch.object(installer, 'validate', lambda user: None))
-        self.args = SimpleNamespace(user='root', no_reload=True)
+        self.stack.enter_context(patch.object(installer, 'configure_platform', lambda args: None))
+        self.args = SimpleNamespace(user='root', no_reload=True, profile='debian')
         self.original = b'@include common-auth\n@include common-account\n@include common-session\n@include common-password\n'
         self.write(installer.PAM, self.original)
+        self.write(installer.PAM.parent / 'common-auth', b'auth required pam_unix.so\n')
         for name, content in [('account', b'account required pam_unix.so\n'),
                               ('session', b'session required pam_permit.so\n'),
                               ('password', b'password required pam_unix.so\n')]:
