@@ -85,7 +85,11 @@ def patch_pam(text, module_path, profile, read_include):
                 if target not in profile.auth_includes and target not in profile.retained_auth_includes:
                     raise RuntimeError(f'unsupported PAM auth include: {target}')
                 nested = included(target, chain)
-                output.extend(auth(nested, (*chain, target), retained_only or target in profile.retained_auth_includes))
+                if target in profile.retained_auth_includes:
+                    auth(nested, (*chain, target), True)
+                    output.append(line if line.endswith('\n') else line + '\n')
+                else:
+                    output.extend(auth(nested, (*chain, target), retained_only))
                 continue
             if group != 'auth':
                 continue
@@ -98,6 +102,13 @@ def patch_pam(text, module_path, profile, read_include):
                     inserted = True
                 continue
             if target in BRANCH_MODULES and not retained_only:
+                continue
+            if profile.name == 'fedora' and target in ('pam_usertype.so', 'pam_localuser.so'):
+                expected_args = 'isregular' if target == 'pam_usertype.so' else ''
+                if retained_only or control != '[default=1 ignore=ignore success=ok]' or args != expected_args:
+                    raise RuntimeError(f'unsupported password-selector control: {target}')
+                # Authselect selectors route between the discarded local/SSSD
+                # password providers. Retaining their jumps could bypass OTP.
                 continue
             if target == 'pam_faillock.so' and target in profile.retained_auth_modules:
                 if 'authfail' in args.split():

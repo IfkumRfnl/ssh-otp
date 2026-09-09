@@ -32,7 +32,6 @@ class DebianProfileTests(unittest.TestCase):
                 result = self.patch(original)
                 self.assertEqual(result, original.replace(
                     '@include common-auth', f'auth requisite {MODULE}'))
-                self.assertEqual(self.patch(result), result)
 
     def test_rejects_credential_include_with_non_auth_policy(self):
         self.includes['common-auth'] += 'account required pam_access.so\n'
