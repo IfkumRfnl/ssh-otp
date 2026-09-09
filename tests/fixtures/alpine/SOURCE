@@ -1,0 +1,37 @@
+# Alpine aports 3.23-stable, read 2026-09-09. PAM fixtures are complete,
+# unsimplified packaging files, renamed to their installed PAM service names.
+sshd: https://gitlab.alpinelinux.org/alpine/aports/-/raw/3.23-stable/main/openssh/sshd.pam
+base-auth: https://gitlab.alpinelinux.org/alpine/aports/-/raw/3.23-stable/main/linux-pam/base-auth.pamd
+base-account: https://gitlab.alpinelinux.org/alpine/aports/-/raw/3.23-stable/main/linux-pam/base-account.pamd
+base-password: https://gitlab.alpinelinux.org/alpine/aports/-/raw/3.23-stable/main/linux-pam/base-password.pamd
+base-session: https://gitlab.alpinelinux.org/alpine/aports/-/raw/3.23-stable/main/linux-pam/base-session.pamd
+base-session-noninteractive: https://gitlab.alpinelinux.org/alpine/aports/-/raw/3.23-stable/main/linux-pam/base-session-noninteractive.pamd
+Packaging: https://gitlab.alpinelinux.org/alpine/aports/-/raw/3.23-stable/main/openssh/APKBUILD
+OpenRC: https://gitlab.alpinelinux.org/alpine/aports/-/raw/3.23-stable/main/openssh/sshd.initd
+
+# base-account retains pam_nologin policy; base-session-noninteractive retains
+# pam_env and pam_limits. Credential-only replacement must not remove these.
+# openssh-server-pam supplies /usr/sbin/sshd.pam; default sshd lacks PAM.
+# OpenRC selects sshd.pam for UsePAM yes. rc-service sshd reload is supported,
+# but cannot migrate a running non-PAM executable to the PAM variant.
+# Source build requires the project's pinned Zig plus musl-dev C headers;
+# python3 runs the installer. linux-pam-dev is needed for the C PAM harness,
+# not the production Zig module, which declares PAM ABI functions directly.
+# Build and verification commands for an isolated Alpine x86_64 rootfs:
+# zig build -Doptimize=ReleaseSafe
+# zig build test
+# python3 -m unittest discover -s tests -p test_profile_alpine.py
+# These commands have NOT been run by this profile agent.
+
+# Lightweight official rootfs (3,696,753 bytes in release index):
+https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.5-x86_64.tar.gz
+https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/latest-releases.yaml
+# Published SHA256: fae0d78ad39563573ddececfdd55ae1040ed428442e95ea5401cf66d9079b327
+
+# Musl ABI grounding: main.zig's handwritten c_ulong rlimit and c_long timespec
+# match x86_64, but not 32-bit musl (64-bit rlim_t/time_t and time64 redirects).
+# Import libc declarations rather than assuming those layouts on 32-bit.
+https://git.musl-libc.org/cgit/musl/plain/include/sys/resource.h
+https://git.musl-libc.org/cgit/musl/plain/include/alltypes.h.in
+# explicit_bzero used by pam.zig exists in musl; it is not glibc-only.
+https://git.musl-libc.org/cgit/musl/plain/src/string/explicit_bzero.c
