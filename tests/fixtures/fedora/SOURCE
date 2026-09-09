@@ -1,0 +1,59 @@
+Primary sources retrieved 2026-09-09:
+
+sshd: verbatim Fedora OpenSSH packaging file, also identical to CentOS Stream 8/9:
+https://src.fedoraproject.org/rpms/openssh/raw/rawhide/f/sshd.pam
+https://gitlab.com/redhat/centos-stream/rpms/openssh/-/raw/c8s/sshd.pam
+https://gitlab.com/redhat/centos-stream/rpms/openssh/-/raw/c9s/sshd.pam
+
+password-auth and postlogin: upstream authselect 1.2.6 sssd templates:
+https://raw.githubusercontent.com/authselect/authselect/1.2.6/profiles/sssd/password-auth
+https://raw.githubusercontent.com/authselect/authselect/1.2.6/profiles/sssd/postlogin
+# Fixture simplification: render with no optional features; remove conditional
+# lines, render default nullok and showfailed, omit resulting empty leading lines.
+# These are rendered template fixtures, not an asserted installed-machine dump.
+# Current postlogin changes pam_lastlog to pam_lastlog2, still session-only:
+https://raw.githubusercontent.com/authselect/authselect/master/profiles/sssd/postlogin
+https://raw.githubusercontent.com/authselect/authselect/master/profiles/sssd/password-auth
+
+Service and release identification:
+https://src.fedoraproject.org/rpms/openssh/raw/rawhide/f/sshd.service
+https://src.fedoraproject.org/rpms/fedora-release/raw/rawhide/f/fedora-release.spec
+https://gitlab.com/redhat/centos-stream/rpms/centos-stream-release/-/raw/c9s/centos-stream-release.spec
+# sshd.service is the packaged systemd unit. CentOS ID=centos,
+# ID_LIKE="rhel fedora". Derivatives require a matching audited PAM layout;
+# family identification is not a guarantee about a customized installation.
+
+Authorization and authentication boundaries:
+https://raw.githubusercontent.com/linux-pam/linux-pam/master/modules/pam_sepermit/pam_sepermit.8.xml
+# pam_sepermit implements auth and account; matching users are denied unless
+# SELinux is enforcing. Preserve required gates in either stack.
+# Retain postlogin only after auditing actual auth contents. The default is
+# session-only; with-ecryptfs adds password-dependent optional auth and is not
+# supported. Do not edit authselect-generated password-auth/postlogin files.
+# Preserve their account/session/password references. Recursively audit the
+# auth flow before replacing credentials: pam_usertype/pam_localuser jumps
+# cannot remain capable of skipping the burner. Mandatory U2F/smartcard,
+# systemd-homed, custom auth modules, and unknown control flow fail closed.
+# No claim that central password/MFA policy can be silently discarded.
+
+SELinux integration references:
+https://raw.githubusercontent.com/fedora-selinux/selinux-policy/rawhide/policy/modules/system/libraries.fc
+https://raw.githubusercontent.com/fedora-selinux/selinux-policy/rawhide/policy/modules/services/ssh.fc
+https://raw.githubusercontent.com/fedora-selinux/selinux-policy/rawhide/policy/modules/system/authlogin.fc
+https://raw.githubusercontent.com/SELinuxProject/selinux/master/policycoreutils/setfiles/restorecon.8
+# Shared libraries in standard /usr paths normally receive lib_t. Query the
+# host policy using matchpathcon, apply restorecon -v, then matchpathcon -V;
+# do not assume a hard-coded label or rely on nonpersistent chcon changes.
+# Check every installed/replaced path, including PAM/SSH configuration and CLI.
+# A nonstandard path needs an administrator-reviewed persistent semanage fcontext
+# mapping followed by restorecon, not disabling SELinux or broad allow rules.
+# Module loading is only part of enforcement: /run/ssh-otp needs an audited
+# private runtime type and access for the real sshd/sshd-auth and CLI domains,
+# including locking, record reads/writes/deletion, plus recreation labeling after
+# reboot. Generic /run labeling is not proof of these permissions. Refuse an
+# enforcing-host support claim without a suitable installed policy and a real
+# enforcing-host burner/key/replay smoke test. Permissive mode is not proof.
+# Rootless/userns containers can exercise userspace PAM and SSH behavior, but
+# cannot install/validate the host's SELinux policy, privileged security xattrs,
+# sshd domain transitions, user mappings, or pam_selinux session enforcement.
+# Do not disable SELinux or remove pam_sepermit/pam_selinux to make tests pass.
