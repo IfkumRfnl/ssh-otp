@@ -1,11 +1,17 @@
 """Alpine packaging policy must survive burner authentication replacement."""
+import os
 from pathlib import Path
+import shutil
+import socket
+import subprocess
+import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from profiles.alpine import PROFILE
 from profiles.common import patch_pam
-from profiles.runtime import check_pam_daemon
+from profiles.runtime import check_pam_daemon, service_command
 
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'alpine'
@@ -64,6 +70,67 @@ class AlpineDaemonTests(unittest.TestCase):
                 patch('profiles.runtime.os.readlink', return_value='/usr/sbin/sshd (deleted)'):
             with self.assertRaises(RuntimeError):
                 check_pam_daemon(PROFILE, '/usr/sbin/sshd.pam')
+
+
+@unittest.skipUnless(Path('/run/.containerenv').exists() and Path('/usr/sbin/sshd.pam').exists()
+                     and shutil.which('rc-service'),
+                     'requires disposable Alpine container with OpenRC')
+class AlpineReloadTests(unittest.TestCase):
+    def test_reload_after_removing_usepam_keeps_running_daemon(self):
+        self.assertEqual(os.geteuid(), 0)
+        self.assertTrue(any(int(row.split()[0]) == 0 and int(row.split()[1]) != 0
+                            for row in Path('/proc/self/uid_map').read_text().splitlines()),
+                        'refusing host-root identity mapping')
+        name = 'ssh-otp-reload-test'
+        pidfile = Path(f'/run/{name}.pid')
+        service = Path(f'/etc/init.d/{name}')
+        settings = Path(f'/etc/conf.d/{name}')
+        with tempfile.TemporaryDirectory(prefix='ssh-otp-reload-', dir='/root') as directory:
+            root = Path(directory)
+            hostkey = root / 'hostkey'
+            subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(hostkey)],
+                           check=True)
+            dropin = root / 'pam.conf'
+            dropin.write_text('UsePAM yes\n')
+            config = root / 'sshd_config'
+            config.write_text(f'Include {dropin}\nHostKey {hostkey}\n'
+                              'Port 22223\nListenAddress 127.0.0.1\n'
+                              'PasswordAuthentication no\nKbdInteractiveAuthentication no\n')
+            Path('/run/openrc').mkdir(exist_ok=True)
+            Path('/run/openrc/softlevel').write_text('default\n')
+            service.symlink_to('/etc/init.d/sshd')
+            settings.write_text(f'cfgfile="{config}"\nsshd_disable_keygen=yes\n')
+            try:
+                subprocess.run(['rc-service', '--nodeps', name, 'start'], check=True,
+                               capture_output=True, text=True)
+                pid = int(pidfile.read_text())
+                daemon = os.readlink(f'/proc/{pid}/exe')
+                self.assertEqual(daemon, '/usr/sbin/sshd.pam')
+                # Same transition as uninstall: the managed UsePAM setting is
+                # gone before reload; the listener must survive without restart.
+                dropin.unlink()
+                subprocess.run(service_command(PROFILE, daemon, name), check=True,
+                               capture_output=True, text=True)
+                deadline = time.monotonic() + 5
+                while True:
+                    try:
+                        with socket.create_connection(('127.0.0.1', 22223), timeout=0.2) as connection:
+                            self.assertTrue(connection.recv(256).startswith(b'SSH-2.0-'))
+                        break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            raise
+                        time.sleep(0.05)
+                # OpenSSH may fork while re-executing after SIGHUP.
+                current_pid = int(pidfile.read_text())
+                self.assertEqual(os.readlink(f'/proc/{current_pid}/exe'), daemon)
+            finally:
+                # Restore executable selection for the packaged stop command.
+                dropin.write_text('UsePAM yes\n')
+                subprocess.run(['rc-service', '--nodeps', name, 'stop'],
+                               capture_output=True, text=True)
+                settings.unlink()
+                service.unlink()
 
 
 if __name__ == '__main__':

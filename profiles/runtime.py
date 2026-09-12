@@ -22,7 +22,7 @@ def sshd_path(profile, override=None):
     return executable('sshd.pam' if profile.name == 'alpine' else 'sshd')
 
 
-def service_command(profile, override=None):
+def service_command(profile, daemon, override=None):
     if Path('/run/systemd/system').is_dir():
         systemctl = executable('systemctl')
         names = (override,) if override else profile.systemd_services
@@ -39,7 +39,12 @@ def service_command(profile, override=None):
         name = override or profile.openrc_service
         if not name or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.' for char in name):
             raise RuntimeError('invalid OpenRC service name')
-        return (executable('rc-service'), name, 'reload')
+        # Alpine's reload script reselects sshd vs sshd.pam from UsePAM.
+        # Uninstall removes that setting before reload, but the running
+        # executable is still the PAM daemon. Match both it and OpenRC's
+        # service-specific pidfile; never start or restart a stopped service.
+        return (executable('start-stop-daemon'), '--signal', 'HUP',
+                '--exec', daemon, '--pidfile', f'/run/{name}.pid')
     raise RuntimeError('no supported running service manager; use --no-reload only for offline setup')
 
 

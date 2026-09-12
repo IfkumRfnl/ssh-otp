@@ -123,7 +123,7 @@ def configure_platform(args):
     if args.action == 'install':
         check_security(profile, args.selinux_policy_reviewed)
         check_pam_daemon(profile, SSHD)
-    RELOAD_COMMAND = None if args.no_reload else service_command(profile, args.service)
+    RELOAD_COMMAND = None if args.no_reload else service_command(profile, SSHD, args.service)
     return profile
 
 

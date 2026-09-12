@@ -17,7 +17,7 @@ IMAGES = {
     'arch': ('docker.io/library/archlinux:base',
              'pacman -Syu --noconfirm --needed openssh python gcc pam pambase openssl && pacman -Scc --noconfirm'),
     'alpine': ('docker.io/library/alpine:3.23',
-               'apk add --no-cache openssh-server-pam openssh-server-common-openrc openssh-client-default linux-pam python3 build-base openssl'),
+               'apk add --no-cache openssh-server-pam openssh-server-common-openrc openssh-client-default linux-pam openrc python3 build-base openssl'),
 }
 
 
@@ -58,6 +58,7 @@ cd /work
 /opt/zig/zig build -j2 -Doptimize=ReleaseSafe --summary all
 /opt/zig/zig build test -j2 -Doptimize=ReleaseSafe --summary all
 python3 -m unittest discover -s tests -p test_filesystem.py -v
+python3 -m unittest discover -s tests -p 'test_profile_*.py' -v
 python3 tests/distro_smoke.py
 '''
     # Relabel only disposable copies: applying :z to the checkout or compiler
