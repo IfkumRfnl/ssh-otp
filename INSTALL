@@ -41,6 +41,10 @@ session and password-management rules. Unknown auth modules, custom MFA,
 unsupported control flow, include cycles and hidden password fallbacks are
 rejected rather than silently removed. System-wide PAM/authselect files are read,
 not rewritten; only the SSH service PAM file is changed.
+Mandatory denial rules (including authselect's smartcard-required policy) are
+rejected unless a recognized password-success branch bypasses them. Untyped
+@include chains are checked recursively; mixed account/session/password rules
+are rejected rather than lost when replacing authentication.
 
 Profiles are not a promise that every customized PAM stack, service manager,
 architecture or distribution derivative works. Primary packaging sources and
@@ -99,9 +103,11 @@ runtime-store permissions. On enforcing hosts, installation refuses by default.
 Provision and test a policy for the actual SSH authentication domain, the issuer,
 and /run/ssh-otp, including persistent file contexts/creation labels. Only then
 use --selinux-policy-reviewed to acknowledge that administrator-supplied policy.
-The installer applies restorecon after file replacement when SELinux is active;
-this does not create policy or prove the credential store is accessible. It never
-disables SELinux, makes it permissive, or grants broad permissions automatically.
+The installer applies restorecon after file replacement when SELinux is active,
+preserving its executable alias after validating the symlink chain so multicall
+tools run in the intended mode. This does not create policy or prove the credential
+store is accessible. It never disables SELinux, makes it permissive, or grants
+broad permissions automatically.
 
 Keep the trusted session open until a second session succeeds. Installation and
 uninstallation attempt rollback on errors, including failures during backup or
@@ -206,15 +212,20 @@ burner SSH logins on private loopback with a pinned host key:
 
 Alternatively pass --zig-dir /path/to/zig-installation (contains zig and lib/).
 Use --rebuild to refresh base images/packages. Container runtime networking is
-none; no ports are published and source/toolchain mounts are read-only. Containers
+none; no ports are published and source/toolchain mounts are read-only. The runner
+stages disposable copies of the source and Zig installation, then applies shared
+container labels to those copies for SELinux hosts; original host labels are
+unchanged. Allow temporary disk space for both copies. Staged files and containers
 are removed afterward; test images and per-distro Zig cache volumes remain cached.
 Build packages/toolchain consume more storage than the idle SSH daemon: minimal
 here means isolated processes without a full OS boot, not zero build dependencies.
 
 These tests check native source compilation, credential lifecycle, real packaged
 PAM account/session policy, key and burner login, session survival past expiry,
-replay and Unix-password rejection, prompt-free inactive rejection, and original
-PAM restoration. They do NOT boot/test systemd or OpenRC reloads, nor establish
+replay rejection before the credential's original expiry, Unix-password rejection,
+prompt-free inactive rejection, and original PAM restoration. The replay check
+is independent of the post-expiry session check. They do NOT boot/test systemd or
+OpenRC reloads, nor establish
 SELinux enforcement compatibility. RHEL-derived layouts are source-fixture
 verified; Fedora is the runtime representative, not a substitute for RHEL tests.
 

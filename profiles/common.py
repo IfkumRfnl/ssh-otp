@@ -74,21 +74,38 @@ def patch_pam(text, module_path, profile, read_include):
             if group == '@include':
                 audit_non_auth(included(target, chain), (*chain, target))
 
+    def audit_auth_only(source, chain):
+        for line in source.splitlines():
+            parsed = rule(line)
+            if parsed is None:
+                continue
+            group, control, target, args = parsed
+            if group == '@include':
+                audit_auth_only(included(target, chain), (*chain, target))
+            elif group != 'auth':
+                raise RuntimeError(f'mixed management groups in auth include: {chain[-1]}')
+
     def auth(source, chain, retained_only=False):
         nonlocal inserted, credentials
         output = []
+        auth_index = 0
+        password_jump_end = 0
+        password_sufficient = False
         for line in source.splitlines(keepends=True):
             parsed = rule(line)
             if parsed is None:
                 continue
             group, control, target, args = parsed
+            if group in ('auth', '@include'):
+                auth_index += 1
             if group == '@include' or (group == 'auth' and control in ('include', 'substack')):
                 if target not in profile.auth_includes and target not in profile.retained_auth_includes:
                     raise RuntimeError(f'unsupported PAM auth include: {target}')
                 nested = included(target, chain)
                 if target in profile.retained_auth_includes:
                     auth(nested, (*chain, target), True)
-                    output.append(line if line.endswith('\n') else line + '\n')
+                    output.append(f'auth include {target}\n' if group == '@include'
+                                  else line if line.endswith('\n') else line + '\n')
                 else:
                     output.extend(auth(nested, (*chain, target), retained_only))
                 continue
@@ -97,12 +114,24 @@ def patch_pam(text, module_path, profile, read_include):
             if target in PASSWORD_MODULES:
                 if retained_only:
                     raise RuntimeError(f'password authentication hidden in retained include: {target}')
+                if control == 'sufficient':
+                    password_sufficient = True
+                else:
+                    jump = re.fullmatch(r'\[success=(\d+) default=(?:ignore|bad)\]', control)
+                    if jump:
+                        password_jump_end = max(password_jump_end, auth_index + int(jump[1]))
                 credentials += 1
                 if not inserted:
                     output.append(f'auth requisite {module_path}\n')
                     inserted = True
                 continue
             if target in BRANCH_MODULES and not retained_only:
+                # A denial is fallback only if a preceding password success can
+                # skip it in this stack. An unconditional denial is site policy.
+                if target == 'pam_deny.so' and (
+                        control not in ('required', 'requisite') or args
+                        or not (password_sufficient or auth_index <= password_jump_end)):
+                    raise RuntimeError('unsupported mandatory PAM denial outside password fallback')
                 continue
             if profile.name == 'fedora' and target in ('pam_usertype.so', 'pam_localuser.so'):
                 expected_args = 'isregular' if target == 'pam_usertype.so' else ''
@@ -135,8 +164,7 @@ def patch_pam(text, module_path, profile, read_include):
             source = included(target, ())
             if target in profile.auth_includes or target in profile.retained_auth_includes:
                 # Removing a whole @include must not remove account/session rules.
-                if any(item and item[0] not in ('auth', '@include') for item in map(rule, source.splitlines())):
-                    raise RuntimeError(f'mixed management groups in auth include: {target}')
+                audit_auth_only(source, (target,))
                 output.extend(auth(source, (target,), target in profile.retained_auth_includes))
             else:
                 audit_non_auth(source, (target,))

@@ -2,9 +2,11 @@
 import os
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 
 from profiles.filesystem import safe_parent, trusted_file
+from profiles.runtime import executable
 
 
 @unittest.skipUnless(Path('/run/.containerenv').exists(), 'requires disposable Podman container')
@@ -29,6 +31,16 @@ class TrustedPathTests(unittest.TestCase):
         safe_parent(alias / 'created/file')
         self.assertTrue((self.safe / 'created').is_dir())
         self.assertEqual(trusted_file(alias / 'file'), self.file)
+
+    def test_executable_alias_preserves_program_dispatch(self):
+        program = self.safe / 'multicall'
+        program.write_text('#!/bin/sh\nprintf "%s\\n" "${0##*/}"\n')
+        program.chmod(0o755)
+        alias = self.safe / 'restorecon'
+        alias.symlink_to(program.name)
+        result = subprocess.run([executable(str(alias))], check=True,
+                                capture_output=True, text=True)
+        self.assertEqual(result.stdout, 'restorecon\n')
 
     def test_writable_intermediate_cannot_be_hidden_by_resolution(self):
         writable = self.root / 'writable'

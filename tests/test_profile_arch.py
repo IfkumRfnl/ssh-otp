@@ -84,6 +84,23 @@ class ArchProfileTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.patch()
 
+    def test_nested_untyped_include_cannot_discard_other_management_groups(self):
+        self.stacks['sshd'] = '@include system-remote-login\n'
+        self.stacks['system-remote-login'] = '@include system-login\n'
+        self.stacks['system-login'] = (
+            'auth required pam_unix.so\n'
+            'account required pam_nologin.so\n'
+            'session required pam_limits.so\n'
+        )
+        with self.assertRaises(RuntimeError):
+            self.patch()
+
+    def test_nested_auth_only_untyped_includes_remain_supported(self):
+        self.stacks['sshd'] = '@include system-remote-login\n'
+        self.stacks['system-remote-login'] = '@include system-login\n'
+        self.stacks['system-login'] = 'auth required pam_unix.so\n'
+        self.assertEqual(self.patch(), f'auth requisite {MODULE}\n')
+
 
 if __name__ == '__main__':
     unittest.main()

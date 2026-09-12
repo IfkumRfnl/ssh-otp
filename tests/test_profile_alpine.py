@@ -1,9 +1,11 @@
 """Alpine packaging policy must survive burner authentication replacement."""
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from profiles.alpine import PROFILE
 from profiles.common import patch_pam
+from profiles.runtime import check_pam_daemon
 
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'alpine'
@@ -54,6 +56,14 @@ class AlpinePamTests(unittest.TestCase):
         text = read_include('sshd').replace('base-auth', 'site-auth')
         with self.assertRaises(RuntimeError):
             patch_pam(text, MODULE, PROFILE, read_include)
+
+
+class AlpineDaemonTests(unittest.TestCase):
+    def test_deleted_non_pam_daemon_is_rejected(self):
+        with patch('profiles.runtime.Path.iterdir', return_value=[Path('/proc/123')]), \
+                patch('profiles.runtime.os.readlink', return_value='/usr/sbin/sshd (deleted)'):
+            with self.assertRaises(RuntimeError):
+                check_pam_daemon(PROFILE, '/usr/sbin/sshd.pam')
 
 
 if __name__ == '__main__':

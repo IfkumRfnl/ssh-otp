@@ -81,6 +81,29 @@ class FedoraPamTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.patch()
 
+    def test_mandatory_smartcard_denial_is_rejected(self):
+        self.includes['password-auth'] = (
+            'auth required pam_deny.so # Smartcard authentication is required\n'
+            + self.includes['password-auth']
+        )
+        with self.assertRaises(RuntimeError):
+            self.patch()
+
+    def test_denial_after_required_password_is_not_a_fallback(self):
+        self.includes['password-auth'] = (
+            'auth required pam_unix.so\n'
+            'auth required pam_deny.so\n'
+        )
+        with self.assertRaises(RuntimeError):
+            self.patch()
+
+    def test_retained_untyped_include_stays_auth_only_when_expanded(self):
+        self.includes['password-auth'] += '@include postlogin\n'
+        result = self.patch()
+        self.assertNotIn('@include postlogin', result)
+        for kind in ('account', 'session', 'password'):
+            self.assertEqual(self.rules(result, kind), self.rules(self.original, kind))
+
     def test_custom_selector_jump_cannot_skip_burner(self):
         self.includes['password-auth'] = self.includes['password-auth'].replace(
             '[default=1 ignore=ignore success=ok]', '[default=2 ignore=ignore success=ok]', 1,

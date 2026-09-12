@@ -60,11 +60,23 @@ cd /work
 python3 -m unittest discover -s tests -p test_filesystem.py -v
 python3 tests/distro_smoke.py
 '''
-    subprocess.run(command + ['run', '--rm', '--network=none', '--name', f'ssh-otp-test-{args.distro}',
-        '-v', f'{ROOT}:/src:ro', '-v', f'{zig.resolve()}:/opt/zig:ro',
-        '-v', f'ssh-otp-zig-cache-{args.distro}:/root/.cache/zig',
-        '-v', f'ssh-otp-build-cache-{args.distro}:/work/.zig-cache', tag,
-        '/bin/sh', '-c', script], check=True)
+    # Relabel only disposable copies: applying :z to the checkout or compiler
+    # would change host labels needed by other confined applications.
+    with tempfile.TemporaryDirectory(prefix='ssh-otp-container-run-') as directory:
+        staging = Path(directory)
+        source = staging / 'src'
+        source.mkdir()
+        for name in ('src', 'profiles', 'tests'):
+            shutil.copytree(ROOT / name, source / name)
+        for name in ('build.zig', 'install.py', 'ssh-otp.1'):
+            shutil.copy2(ROOT / name, source / name)
+        compiler = staging / 'zig'
+        shutil.copytree(zig.resolve(), compiler)
+        subprocess.run(command + ['run', '--rm', '--network=none', '--name', f'ssh-otp-test-{args.distro}',
+            '-v', f'{source}:/src:ro,z', '-v', f'{compiler}:/opt/zig:ro,z',
+            '-v', f'ssh-otp-zig-cache-{args.distro}:/root/.cache/zig',
+            '-v', f'ssh-otp-build-cache-{args.distro}:/work/.zig-cache', tag,
+            '/bin/sh', '-c', script], check=True)
     print(f'PASS: {args.distro} source build, unit tests and native SSH/PAM smoke', flush=True)
 
 

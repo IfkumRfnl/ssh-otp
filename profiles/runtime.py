@@ -11,7 +11,9 @@ def executable(name):
     path = shutil.which(name)
     if not path:
         raise RuntimeError(f'required executable not found: {name}')
-    return str(trusted_file(path))
+    trusted_file(path)
+    # Multicall tools such as restorecon select their behavior from argv[0].
+    return str(Path(path).absolute())
 
 
 def sshd_path(profile, override=None):
@@ -69,6 +71,8 @@ def check_pam_daemon(profile, daemon):
             target = os.readlink(entry / 'exe')
         except (OSError, PermissionError):
             continue
+        # Linux marks unlinked executables this way after package replacement.
+        target = target.removesuffix(' (deleted)')
         if Path(target).name == 'sshd' and target != daemon:
             raise RuntimeError('Alpine is running the non-PAM sshd; migrate it to sshd.pam through a trusted '
                                'session before installation. Reload alone cannot enable PAM.')
