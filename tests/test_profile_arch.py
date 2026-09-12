@@ -101,6 +101,35 @@ class ArchProfileTests(unittest.TestCase):
         self.stacks['system-login'] = 'auth required pam_unix.so\n'
         self.assertEqual(self.patch(), f'auth requisite {MODULE}\n')
 
+    def test_password_jump_across_ordinary_include_is_rejected(self):
+        for include in ('auth include system-auth', '@include system-auth'):
+            with self.subTest(include=include):
+                self.stacks['system-login'] = (
+                    'auth [success=1 default=ignore] pam_unix.so\n'
+                    + include + '\n'
+                )
+                self.stacks['system-auth'] = (
+                    'auth required pam_shells.so\n'
+                    'auth requisite pam_nologin.so\n'
+                )
+                with self.assertRaises(RuntimeError):
+                    self.patch()
+
+    def test_password_jump_across_substack_preserves_authorization(self):
+        self.stacks['system-login'] = (
+            'auth [success=1 default=ignore] pam_unix.so\n'
+            'auth substack system-auth\n'
+        )
+        self.stacks['system-auth'] = (
+            'auth required pam_shells.so\n'
+            'auth requisite pam_nologin.so\n'
+        )
+        self.assertEqual(self.auth_rules(self.patch()), [
+            f'auth requisite {MODULE}',
+            'auth required pam_shells.so',
+            'auth requisite pam_nologin.so',
+        ])
+
 
 if __name__ == '__main__':
     unittest.main()

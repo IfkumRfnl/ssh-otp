@@ -99,6 +99,11 @@ def patch_pam(text, module_path, profile, read_include):
             if group in ('auth', '@include'):
                 auth_index += 1
             if group == '@include' or (group == 'auth' and control in ('include', 'substack')):
+                # Ordinary includes expand into individual jump targets; only
+                # substacks count as one. Refuse ambiguous cross-include jumps
+                # rather than misclassifying a later mandatory denial.
+                if control != 'substack' and auth_index <= password_jump_end:
+                    raise RuntimeError('unsupported password jump across PAM include')
                 if target not in profile.auth_includes and target not in profile.retained_auth_includes:
                     raise RuntimeError(f'unsupported PAM auth include: {target}')
                 nested = included(target, chain)

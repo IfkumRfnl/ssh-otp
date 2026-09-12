@@ -45,6 +45,9 @@ Mandatory denial rules (including authselect's smartcard-required policy) are
 rejected unless a recognized password-success branch bypasses them. Untyped
 @include chains are checked recursively; mixed account/session/password rules
 are rejected rather than lost when replacing authentication.
+Numeric password-success jumps crossing ordinary auth includes or @include
+directives are rejected: their expanded jump targets are not audited. A substack
+counts as one jump target and is not subject to this restriction.
 
 Profiles are not a promise that every customized PAM stack, service manager,
 architecture or distribution derivative works. Primary packaging sources and
