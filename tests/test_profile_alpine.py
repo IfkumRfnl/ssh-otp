@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from profiles.alpine import PROFILE
 from profiles.common import patch_pam
-from profiles.runtime import check_pam_daemon, service_command
+from profiles.runtime import _reload_openrc, check_pam_daemon, service_reloader
 
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'alpine'
@@ -76,17 +76,60 @@ class AlpineDaemonTests(unittest.TestCase):
                      and shutil.which('rc-service'),
                      'requires disposable Alpine container with OpenRC')
 class AlpineReloadTests(unittest.TestCase):
-    def test_reload_after_removing_usepam_keeps_running_daemon(self):
+    def setUp(self):
         self.assertEqual(os.geteuid(), 0)
         self.assertTrue(any(int(row.split()[0]) == 0 and int(row.split()[1]) != 0
                             for row in Path('/proc/self/uid_map').read_text().splitlines()),
                         'refusing host-root identity mapping')
-        name = 'ssh-otp-reload-test'
+
+    def test_pidfile_for_a_different_executable_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix='ssh-otp-pidfile-', dir='/root') as directory:
+            pidfile = Path(directory) / 'sshd.pid'
+            process = subprocess.Popen(['/bin/sleep', '30'])
+            try:
+                pidfile.write_text(str(process.pid))
+                with self.assertRaises(RuntimeError):
+                    _reload_openrc(pidfile, '/usr/sbin/sshd.pam')
+                self.assertIsNone(process.poll())
+            finally:
+                process.terminate()
+                process.wait(timeout=5)
+
+    def test_daemon_exit_during_identity_check_fails_closed(self):
+        with tempfile.TemporaryDirectory(prefix='ssh-otp-pidfile-', dir='/root') as directory:
+            pidfile = Path(directory) / 'sshd.pid'
+            process = subprocess.Popen(['/bin/sleep', '30'])
+            samefile = os.path.samefile
+            def exit_after_check(path, daemon):
+                matches = samefile(path, daemon)
+                process.terminate()
+                process.wait(timeout=5)
+                return matches
+            try:
+                pidfile.write_text(str(process.pid))
+                with patch('profiles.runtime.os.path.samefile', side_effect=exit_after_check):
+                    with self.assertRaises(ProcessLookupError):
+                        _reload_openrc(pidfile, '/bin/sleep')
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                process.wait(timeout=5)
+
+    def test_reload_after_removing_usepam_keeps_running_daemon(self):
+        self.check_reload(custom_pidfile=False)
+
+    def test_reload_with_custom_openrc_pidfile(self):
+        self.check_reload(custom_pidfile=True)
+
+    def check_reload(self, custom_pidfile):
+        name = 'ssh-otp-custom-reload-test' if custom_pidfile else 'ssh-otp-reload-test'
         pidfile = Path(f'/run/{name}.pid')
         service = Path(f'/etc/init.d/{name}')
         settings = Path(f'/etc/conf.d/{name}')
         with tempfile.TemporaryDirectory(prefix='ssh-otp-reload-', dir='/root') as directory:
             root = Path(directory)
+            if custom_pidfile:
+                pidfile = root / 'custom-sshd.pid'
             hostkey = root / 'hostkey'
             subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(hostkey)],
                            check=True)
@@ -99,18 +142,23 @@ class AlpineReloadTests(unittest.TestCase):
             Path('/run/openrc').mkdir(exist_ok=True)
             Path('/run/openrc/softlevel').write_text('default\n')
             service.symlink_to('/etc/init.d/sshd')
-            settings.write_text(f'cfgfile="{config}"\nsshd_disable_keygen=yes\n')
+            settings.write_text(f'cfgfile="{config}"\nsshd_disable_keygen=yes\n'
+                                + (f'SSHD_PIDFILE="{pidfile}"\n' if custom_pidfile else ''))
             try:
                 subprocess.run(['rc-service', '--nodeps', name, 'start'], check=True,
                                capture_output=True, text=True)
+                deadline = time.monotonic() + 5
+                while not pidfile.exists():
+                    if time.monotonic() >= deadline:
+                        self.fail(f'SSH daemon did not create {pidfile}')
+                    time.sleep(0.05)
                 pid = int(pidfile.read_text())
                 daemon = os.readlink(f'/proc/{pid}/exe')
                 self.assertEqual(daemon, '/usr/sbin/sshd.pam')
                 # Same transition as uninstall: the managed UsePAM setting is
                 # gone before reload; the listener must survive without restart.
                 dropin.unlink()
-                subprocess.run(service_command(PROFILE, daemon, name), check=True,
-                               capture_output=True, text=True)
+                service_reloader(PROFILE, daemon, name, pidfile if custom_pidfile else None)()
                 deadline = time.monotonic() + 5
                 while True:
                     try:

@@ -1,7 +1,9 @@
 """Machine-specific SSH discovery; never start services or weaken SELinux."""
+from functools import partial
 from pathlib import Path
 import os
 import shutil
+import signal
 import subprocess
 
 from .filesystem import trusted_file
@@ -22,8 +24,14 @@ def sshd_path(profile, override=None):
     return executable('sshd.pam' if profile.name == 'alpine' else 'sshd')
 
 
-def service_command(profile, daemon, override=None):
+def service_reloader(profile, daemon, override=None, pidfile=None):
+    if pidfile is not None:
+        pidfile = Path(pidfile)
+        if not pidfile.is_absolute():
+            raise RuntimeError('OpenRC pidfile must be an absolute path')
     if Path('/run/systemd/system').is_dir():
+        if pidfile is not None:
+            raise RuntimeError('--pidfile is only supported for OpenRC services')
         systemctl = executable('systemctl')
         names = (override,) if override else profile.systemd_services
         for name in names:
@@ -33,19 +41,34 @@ def service_command(profile, daemon, override=None):
             if result.returncode == 0 and result.stdout.strip() == 'loaded':
                 # A socket-activated but inactive service will reject reload; the
                 # installer rolls back rather than starting it unexpectedly.
-                return (systemctl, 'reload', unit)
+                return partial(subprocess.run, [systemctl, 'reload', unit],
+                               check=True, capture_output=True, text=True)
         raise RuntimeError('no supported SSH systemd service found; specify --service')
     if profile.openrc_service and Path('/run/openrc').is_dir():
         name = override or profile.openrc_service
         if not name or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.' for char in name):
             raise RuntimeError('invalid OpenRC service name')
-        # Alpine's reload script reselects sshd vs sshd.pam from UsePAM.
-        # Uninstall removes that setting before reload, but the running
-        # executable is still the PAM daemon. Match both it and OpenRC's
-        # service-specific pidfile; never start or restart a stopped service.
-        return (executable('start-stop-daemon'), '--signal', 'HUP',
-                '--exec', daemon, '--pidfile', f'/run/{name}.pid')
+        if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
+            raise RuntimeError('OpenRC reload requires Python pidfd support; use --no-reload')
+        # Read the pidfile on every reload, including rollback. Alpine's packaged
+        # reload reselects the executable from UsePAM, which uninstall removes.
+        return partial(_reload_openrc, pidfile if pidfile is not None else Path(f'/run/{name}.pid'), daemon)
     raise RuntimeError('no supported running service manager; use --no-reload only for offline setup')
+
+
+def _reload_openrc(pidfile, daemon):
+    pid = int(trusted_file(pidfile).read_text().strip())
+    if pid <= 1:
+        raise RuntimeError(f'invalid SSH daemon PID in {pidfile}')
+    # Pin the process before checking its executable. If it exits and the PID
+    # is reused, pidfd_send_signal fails instead of signaling the replacement.
+    fd = os.pidfd_open(pid)
+    try:
+        if not os.path.samefile(f'/proc/{pid}/exe', daemon):
+            raise RuntimeError(f'SSH pidfile does not identify the selected daemon: {pidfile}')
+        signal.pidfd_send_signal(fd, signal.SIGHUP)
+    finally:
+        os.close(fd)
 
 
 def check_security(profile, reviewed_selinux=False):

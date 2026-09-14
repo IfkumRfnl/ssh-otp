@@ -15,7 +15,7 @@ import tempfile
 from profiles import select_profile
 from profiles.common import patch_pam
 from profiles.filesystem import safe_parent, trusted_file
-from profiles.runtime import check_pam_daemon, check_security, restore_labels, service_command, sshd_path
+from profiles.runtime import check_pam_daemon, check_security, restore_labels, service_reloader, sshd_path
 
 RUNTIME = Path('/run/ssh-otp')
 STATE = Path('/var/lib/ssh-otp-install')
@@ -25,7 +25,7 @@ CLI = Path('/usr/local/bin/ssh-otp')
 MODULE = Path('/usr/local/lib/security/pam_ssh_otp.so')
 MAN = Path('/usr/local/share/man/man1/ssh-otp.1')
 SSHD = '/usr/sbin/sshd'
-RELOAD_COMMAND = None
+RELOAD_SERVICE = None
 FILE_MODES = {CLI: 0o4755, MODULE: 0o644, MAN: 0o644, DROPIN: 0o644}
 CONFIG = b'''# Managed by ssh-otp. Account restrictions remain in sshd_config.
 UsePAM yes
@@ -111,19 +111,19 @@ def validate(user):
 
 def reload_ssh(no_reload):
     if not no_reload:
-        if RELOAD_COMMAND is None:
+        if RELOAD_SERVICE is None:
             raise RuntimeError('SSH service reload was not configured')
-        command(*RELOAD_COMMAND)
+        RELOAD_SERVICE()
 
 
 def configure_platform(args):
-    global SSHD, RELOAD_COMMAND
+    global SSHD, RELOAD_SERVICE
     profile = select_profile(args.profile)
     SSHD = sshd_path(profile, args.sshd_path)
     if args.action == 'install':
         check_security(profile, args.selinux_policy_reviewed)
         check_pam_daemon(profile, SSHD)
-    RELOAD_COMMAND = None if args.no_reload else service_command(profile, SSHD, args.service)
+    RELOAD_SERVICE = None if args.no_reload else service_reloader(profile, SSHD, args.service, args.pidfile)
     return profile
 
 
@@ -281,6 +281,7 @@ def main():
                         help='override OS detection with an audited PAM profile')
     parser.add_argument('--sshd-path', help='explicit PAM-capable sshd executable')
     parser.add_argument('--service', help='override the distro SSH service name')
+    parser.add_argument('--pidfile', type=Path, help='absolute OpenRC SSH pidfile path; defaults to /run/<service>.pid')
     parser.add_argument('--selinux-policy-reviewed', action='store_true',
                         help='confirm administrator-provisioned and tested SELinux policy; never disables enforcement')
     args = parser.parse_args()

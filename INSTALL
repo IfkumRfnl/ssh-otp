@@ -100,10 +100,23 @@ the installer uses sshd.pam. OpenRC can select it when UsePAM is enabled, but
 reloading an already-running non-PAM executable cannot turn it into sshd.pam.
 The installer refuses that case. Migrate the daemon through a trusted session
 before installing; it will not restart your SSH service to perform the migration.
-Automatic Alpine reloads use start-stop-daemon to send HUP, matching both the
-selected PAM executable and OpenRC's standard /run/<service>.pid. This keeps
-uninstall working when removal of the managed drop-in changes UsePAM back to no.
-Custom SSHD_PIDFILE layouts require --no-reload and administrator-managed reload.
+Automatic Alpine reloads read OpenRC's standard /run/<service>.pid, or the
+absolute path supplied with --pidfile for a custom service pidfile. Supply the
+same override on install and uninstall, for example:
+
+    sudo python3 install.py install --user hayk --pidfile /run/custom-sshd.pid
+    sudo python3 install.py uninstall --pidfile /run/custom-sshd.pid
+
+The override selects an existing pidfile; it does not change OpenRC or sshd
+configuration and is not supported with systemd. Reloads verify that the
+running executable matches the selected PAM daemon and send HUP through a Linux
+pidfd. A stale PID for a different executable is rejected; process exit or PID
+reuse during verification cannot redirect the signal to another process.
+This keeps uninstall working when removal of the managed drop-in changes UsePAM
+back to no. Automatic reload requires kernel and Python pidfd support. Replaced
+daemon binaries that no longer match the running executable, custom SSHD_PIDFILE
+layouts, or systems without pidfd support require --no-reload and
+administrator-managed reload.
 
 SELinux: a rootless container cannot validate enforcing domain transitions or
 runtime-store permissions. On enforcing hosts, installation refuses by default.
