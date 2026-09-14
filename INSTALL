@@ -41,6 +41,9 @@ session and password-management rules. Unknown auth modules, custom MFA,
 unsupported control flow, include cycles and hidden password fallbacks are
 rejected rather than silently removed. System-wide PAM/authselect files are read,
 not rewritten; only the SSH service PAM file is changed.
+Password-provider controls are limited to required, requisite, sufficient,
+optional, and [success=N default=ignore|bad] numeric-jump forms. Other controls
+are rejected rather than discarding unaudited policy semantics.
 Mandatory denial rules (including authselect's smartcard-required policy) are
 rejected unless a recognized password-success branch bypasses them. Untyped
 @include chains are checked recursively; mixed account/session/password rules

@@ -125,6 +125,8 @@ def patch_pam(text, module_path, profile, read_include):
                     jump = re.fullmatch(r'\[success=(\d+) default=(?:ignore|bad)\]', control)
                     if jump:
                         password_jump_end = max(password_jump_end, auth_index + int(jump[1]))
+                    elif control not in ('required', 'requisite', 'optional'):
+                        raise RuntimeError(f'unsupported control on PAM password module: {target} {control}')
                 credentials += 1
                 if not inserted:
                     output.append(f'auth requisite {module_path}\n')
