@@ -51,8 +51,9 @@ An attacker with root access can subvert authentication regardless of this tool.
 Root-only, locked runtime credential store; cleared at reboot.
 .TP
 /etc/pam.d/sshd
-Installer replaces common-auth with the burner-only module. Other PAM service
-files are untouched. Account and session policies remain in place.
+Installer replaces audited password-authentication rules using the selected
+distribution profile. Other PAM service files are untouched; recognized
+authorization gates and account/session policies remain in place.
 .TP
 /etc/ssh/sshd_config.d/00-ssh-otp.conf
 Enables PAM keyboard-interactive and preserves public-key access. Ordinary SSH
