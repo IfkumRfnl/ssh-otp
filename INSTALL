@@ -44,6 +44,11 @@ not rewritten; only the SSH service PAM file is changed.
 Password-provider controls are limited to required, requisite, sufficient,
 optional, and [success=N default=ignore|bad] numeric-jump forms. Other controls
 are rejected rather than discarding unaudited policy semantics.
+Provider options are limited to nullok/try_first_pass for pam_unix.so and
+forward_pass for pam_sss.so; pam_systemd_home.so accepts no options. Rules
+without options are also supported. Other options, including SSSD certificate
+authentication modes, are rejected before replacement rather than silently
+removing an additional authentication requirement.
 Mandatory denial rules (including authselect's smartcard-required policy) are
 rejected unless a recognized password-success branch bypasses them. Untyped
 @include chains are checked recursively; mixed account/session/password rules

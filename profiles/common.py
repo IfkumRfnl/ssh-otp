@@ -18,8 +18,12 @@ class Profile:
     pam_vendor_dirs: tuple[str, ...] = ()
 
 
-# These implement the old password branch, not independent authorization gates.
-PASSWORD_MODULES = frozenset({'pam_unix.so', 'pam_sss.so', 'pam_systemd_home.so'})
+# Only audited password-provider options may be discarded with credentials.
+PASSWORD_MODULES = {
+    'pam_unix.so': frozenset({'nullok', 'try_first_pass'}),
+    'pam_sss.so': frozenset({'forward_pass'}),
+    'pam_systemd_home.so': frozenset(),
+}
 BRANCH_MODULES = frozenset({'pam_deny.so', 'pam_permit.so'})
 RULE = re.compile(r'^(-?(?:auth|account|password|session))\s+(\[[^\]]+\]|\S+)\s+(\S+)(?:\s+(.*))?$')
 NAME = re.compile(r'^[a-zA-Z0-9_-]+$')
@@ -119,6 +123,8 @@ def patch_pam(text, module_path, profile, read_include):
             if target in PASSWORD_MODULES:
                 if retained_only:
                     raise RuntimeError(f'password authentication hidden in retained include: {target}')
+                if any(option not in PASSWORD_MODULES[target] for option in args.split()):
+                    raise RuntimeError(f'unsupported arguments on PAM password module: {target} {args}')
                 if control == 'sufficient':
                     password_sufficient = True
                 else:

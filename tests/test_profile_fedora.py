@@ -81,6 +81,21 @@ class FedoraPamTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.patch()
 
+    def test_certificate_authentication_is_rejected(self):
+        self.includes['password-auth'] = (
+            'auth required pam_sss.so require_cert_auth\n'
+            + self.includes['password-auth']
+        )
+        with self.assertRaises(RuntimeError):
+            self.patch()
+
+    def test_unaudited_password_provider_options_are_rejected(self):
+        for provider in ('pam_unix.so', 'pam_sss.so', 'pam_systemd_home.so'):
+            with self.subTest(provider=provider):
+                self.includes['password-auth'] = f'auth required {provider} unaudited_option\n'
+                with self.assertRaises(RuntimeError):
+                    self.patch()
+
     def test_mandatory_smartcard_denial_is_rejected(self):
         self.includes['password-auth'] = (
             'auth required pam_deny.so # Smartcard authentication is required\n'
