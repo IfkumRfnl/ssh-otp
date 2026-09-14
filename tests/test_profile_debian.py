@@ -52,6 +52,11 @@ class DebianProfileTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.patch()
 
+    def test_rejects_unsupported_permit_arguments(self):
+        self.includes['common-auth'] += 'auth required pam_permit.so unexpected\n'
+        with self.assertRaises(RuntimeError):
+            self.patch()
+
 
 if __name__ == '__main__':
     unittest.main()

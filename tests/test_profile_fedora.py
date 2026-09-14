@@ -97,6 +97,14 @@ class FedoraPamTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.patch()
 
+    def test_custom_permit_control_is_rejected(self):
+        self.includes['password-auth'] = (
+            'auth [success=die default=die] pam_permit.so\n'
+            + self.includes['password-auth']
+        )
+        with self.assertRaises(RuntimeError):
+            self.patch()
+
     def test_retained_untyped_include_stays_auth_only_when_expanded(self):
         self.includes['password-auth'] += '@include postlogin\n'
         result = self.patch()

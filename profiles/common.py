@@ -137,6 +137,9 @@ def patch_pam(text, module_path, profile, read_include):
                         control not in ('required', 'requisite') or args
                         or not (password_sufficient or auth_index <= password_jump_end)):
                     raise RuntimeError('unsupported mandatory PAM denial outside password fallback')
+                if target == 'pam_permit.so' and (
+                        control not in ('required', 'requisite', 'optional') or args):
+                    raise RuntimeError('unsupported PAM permit control or arguments')
                 continue
             if profile.name == 'fedora' and target in ('pam_usertype.so', 'pam_localuser.so'):
                 expected_args = 'isregular' if target == 'pam_usertype.so' else ''
